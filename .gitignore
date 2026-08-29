@@ -1,0 +1,9 @@
+node_modules/
+dist/
+wb_data/
+spike/
+workboard
+*.sqlite
+*.db
+*.db-wal
+*.db-shm
