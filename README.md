@@ -1,91 +1,136 @@
 # Agent Workboard
 
-A local-first work queue for one repository, coordinating 2–10 coding agents and
-one human — with recoverable exclusive claims and durable progress.
+A local coordination broker for coding agents working concurrently on one Git
+repository.
 
-> **Status: not built yet.** This describes the target. `PLAN.md` is the
-> authoritative build order. Nothing in this file exists until its phase ships.
+It assigns each task once, gives the claiming agent an isolated or explicitly
+attached Git worktree, and records the branch and commit produced by Codex CLI,
+Claude CLI, Hermes, or another harness.
 
-## The problem
+> **Status: Draft 3, not built.** `PLAN.md` defines the evidence gates and build
+> order. The project stops before implementation if the baseline does not show a
+> real coordination problem.
 
-Agents coordinating through a shared markdown task file duplicate work, clobber
-each other's edits, and strand tasks when one crashes mid-run. This is that file,
-with a lease.
+## What it fixes
+
+When several coding agents work on one repository, they can:
+
+- start the same task;
+- mutate the same working directory;
+- leave partial work that nobody can locate after a crash;
+- finish without recording which branch or commit contains the result.
+
+Agent Workboard coordinates those boundaries. It does not merge branches or
+prevent Git merge conflicts.
+
+## Core workflow
+
+```text
+ready -> claim -> provision/attach worktree -> work -> submit branch + HEAD
+                                           \-> interrupt -> recover/resume
+```
+
+There are two workspace modes:
+
+- **Managed:** the local adapter creates a dedicated branch and `git worktree`.
+- **Attached:** an agent already inside a clean worktree registers it.
+
+Git operations happen in the local CLI/MCP adapter. The central server cannot
+create remote worktrees because repository paths are host-local.
+
+Managed mode is enabled only for a harness integration that can bind subsequent
+commands to the new path and prove that it did so. Otherwise the harness starts in
+a prepared worktree and uses attached mode.
 
 ## Shape
 
-One binary owns one SQLite database. Everything else is a client.
+```text
+ browser ---------------------> workboard serve
+                                  REST + events
+                                  SQLite owner
 
+ Codex / Claude / Hermes host
+   workboard mcp or CLI -------> workboard serve
+          |
+          +-- local repository
+          +-- isolated worktrees
 ```
-   browser  ───►┐
-                │  workboard serve
-   CLI      ───►┤    /api/*  REST + SSE
-                │    /web/*  board UI
-   agent    ───►┘    bun:sqlite ──► wb_data/
-   (MCP stdio)
-```
+
+One compiled executable provides the server, CLI, and MCP adapter:
 
 ```bash
 ./workboard serve --dir ./wb_data --port 8765
 ```
 
-`scp` the binary, run it. Upgrading is replacing the binary.
+## Claim lifecycle
 
-## Core mechanic: the claim lease
+`claim_work` is one agent-facing operation:
 
-An agent claims a work item **exclusively**, gets a `claim_token`, and holds a
-lease while it works.
+1. reserve one `ready` item atomically;
+2. create or validate a local worktree;
+3. activate the claim with repository, host, branch, path, and base commit;
+4. renew the lease automatically in the adapter;
+5. submit a clean worktree's branch and head commit.
 
-```bash
-workboard claim --lease 300      # → item + claim_token, status: doing
-workboard renew  12 --lease 300  # keep it while still working
-workboard done   12              # requires the token
-workboard release 12 --reason "needs human input"
-```
+The LLM does not call `renew` itself.
 
-If the agent dies, the lease expires and the item returns to the queue on its
-own. That recovery is the reason this exists rather than a text file.
+If the adapter is killed, its lease eventually expires and the item becomes
+`interrupted`, not `ready`. The worktree may contain valuable partial work. A
+recovery command locates it and either resumes it or verifies that it is unchanged
+before returning the item to the queue.
+
+No automatic operation deletes a branch or worktree.
 
 ## Guarantees
 
 | Property | Mechanism |
 |----------|-----------|
-| Two agents never hold one item | Selection + claim in a single SQLite transaction |
-| Crashed work is recoverable | Lease expiry sweep returns items to `ready` |
-| Retries don't duplicate | `Idempotency-Key` on every mutation |
-| Stale writes never clobber | `If-Match: <revision>`, `409 stale_revision` |
-| The audit trail can't be faked | Actor derived from the token, never from the request |
-| Comment markdown can't XSS | Raw HTML disabled at the source, plus strict CSP |
+| One active claimant per item | Guarded SQLite `UPDATE ... RETURNING` |
+| No shared managed working directory | Worktree per claim plus verified harness path adoption |
+| Lost claim response does not claim twice | Participant-scoped `request_id` replay |
+| LLM does not manage heartbeats | Local adapter renews in the background |
+| Crashed work remains discoverable | Expiry marks `interrupted`; workspace metadata persists |
+| Submitted result is exact | Branch, base commit, and head commit are recorded |
+| Stale human edits do not overwrite | Item revision plus `If-Match` |
+| Markdown is not executable HTML | React rendering without raw HTML plus URL allowlist |
 
-## Status
+History attributes cooperating clients to their tokens. It is not tamper-proof
+against an agent with the same operating-system access as the database owner.
 
+## Statuses
+
+```text
+ready -> doing -> submitted
+           |
+           +-> interrupted -> resume or verified abandon
 ```
-ready ──► doing ──► review ──► done ──► (reopen)
-```
 
-Blocking is a **separate axis**, not a status: an item is blocked while it has an
-unresolved dependency or a manual block. Blocked items are skipped by
-`claim-next` but keep their status.
+`submitted` means an agent produced a Git result. It does not mean that result is
+reviewed or merged.
 
 ## Interfaces
 
-All three speak to the same REST API, so behavior can't drift between them.
+- **MCP:** primary agent interface using the official MCP SDK over stdio.
+- **CLI:** diagnostics and the same work operations for humans/scripts.
+- **Web:** added only after measured dogfooding passes; shows queue, active
+  workspaces, interruptions, submissions, and recovery warnings.
 
-- **MCP** — `workboard mcp`, official SDK over stdio. How agents use it.
-- **CLI** — `workboard ls / show / claim / renew / release / comment / done`.
-- **Web** — a four-column board at `/web`, live over SSE. *(Phase 3)*
+The MCP adapter exposes coarse operations such as `claim_work`, `submit_work`,
+`release_work`, and `recover_work`. REST provisioning details remain internal.
 
-## Stack
+## Deployment model
 
-Bun 1.4.0, TypeScript strict, `bun:sqlite` (WAL), Zod, official MCP SDK,
-React + shadcn/ui for the board. `bun build --compile` bundles all of it into one
-executable — dependencies are a build-time concern, not something users install.
+- one server process owns one SQLite database;
+- one deployment coordinates one logical Git repository;
+- local adapters may run on several hosts/clones;
+- paths are host-local metadata, while repo/branch/commit identities are portable;
+- Bun bundles the server, CLI, MCP SDK, and later web assets into one executable.
 
-## Not doing (yet)
+## Deliberately deferred
 
-Deferred until real use proves the core is worth extending: themes and component
-playground, @mentions and notifications, nested hierarchies, multi-project
-support, Windows services, per-user permissions, search, attachments.
+The first useful release has no themes, component playground, notifications,
+dependency graph, hierarchy, multi-repository board, automatic merge, automatic
+worktree deletion, or broad cross-platform service matrix.
 
-See `PLAN.md` — including the dogfood gate that decides whether any of it
-gets built.
+Those features must be earned by a baseline and a controlled comparison on real
+Codex, Claude, and Hermes work. See [PLAN.md](./PLAN.md).
