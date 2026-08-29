@@ -7,9 +7,9 @@ It assigns each task once, gives the claiming agent an isolated or explicitly
 attached Git worktree, and records the branch and commit produced by Codex CLI,
 Claude CLI, Hermes, or another harness.
 
-> **Status: Draft 3, not built.** `PLAN.md` defines the evidence gates and build
-> order. The project stops before implementation if the baseline does not show a
-> real coordination problem.
+> **Status: final planning baseline, not built.** `PLAN.md` defines the evidence
+> gates and build order. The project stops before implementation if the baseline
+> does not show a real coordination problem.
 
 ## What it fixes
 
@@ -33,7 +33,7 @@ ready -> claim -> provision/attach worktree -> work -> submit branch + HEAD
 There are two workspace modes:
 
 - **Managed:** the local adapter creates a dedicated branch and `git worktree`.
-- **Attached:** an agent already inside a clean worktree registers it.
+- **Attached:** an agent already inside a clean linked worktree registers it.
 
 Git operations happen in the local CLI/MCP adapter. The central server cannot
 create remote worktrees because repository paths are host-local.
@@ -41,6 +41,11 @@ create remote worktrees because repository paths are host-local.
 Managed mode is enabled only for a harness integration that can bind subsequent
 commands to the new path and prove that it did so. Otherwise the harness starts in
 a prepared worktree and uses attached mode.
+
+Attached mode rejects the repository's primary checkout so a claim cannot take
+ownership of the shared working directory. Here, **clean** means
+`git status --porcelain=v1 --untracked-files=all` is empty; staged, unstaged, and
+untracked non-ignored files all count.
 
 ## Shape
 
@@ -79,14 +84,18 @@ If the adapter is killed, its lease eventually expires and the item becomes
 recovery command locates it and either resumes it or verifies that it is unchanged
 before returning the item to the queue.
 
-No automatic operation deletes a branch or worktree.
+Repository-global stash changes and `prunable` worktree records require explicit
+human recovery. No automatic operation deletes a branch, worktree, stash entry, or
+Git worktree metadata.
 
 ## Guarantees
 
 | Property | Mechanism |
 |----------|-----------|
 | One active claimant per item | Guarded SQLite `UPDATE ... RETURNING` |
-| No shared managed working directory | Worktree per claim plus verified harness path adoption |
+| No shared managed working directory | Worktree per managed claim plus verified harness path adoption |
+| Attached claim does not own shared checkout | Primary checkout rejected using Git-dir/common-dir identity |
+| Untracked work is not called clean | Porcelain status includes all non-ignored untracked files |
 | Lost claim response does not claim twice | Participant-scoped `request_id` replay |
 | LLM does not manage heartbeats | Local adapter renews in the background |
 | Crashed work remains discoverable | Expiry marks `interrupted`; workspace metadata persists |

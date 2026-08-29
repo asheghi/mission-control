@@ -12,7 +12,7 @@ a REST client and never touches Git or SQLite.
 **Stack:** Bun 1.4.0, strict TypeScript, `bun:sqlite`, official MCP SDK, Zod,
 React, and shadcn/ui. `bun build --compile` produces one executable.
 
-**Status:** Draft 3. Nothing described here is implemented yet.
+**Status:** Final planning baseline. Nothing described here is implemented yet.
 
 ---
 
@@ -61,8 +61,9 @@ another machine.
 The project starts with evidence, not scaffolding.
 
 For two working days, run at least two existing harnesses concurrently against a
-named, actively developed repository and its real backlog. Do not use building
-Agent Workboard as the corpus.
+named, actively developed repository and its real backlog. This must be a workflow
+that already exists before Agent Workboard; do not manufacture concurrency to
+justify the tool, and do not use building Agent Workboard as the corpus.
 
 Record in `docs/baseline.md`:
 
@@ -76,9 +77,10 @@ Record in `docs/baseline.md`:
 | Workspace setup time | branch/worktree overhead |
 | Result-location time | time to find branch/commit/output |
 
-Before the run, name the repository and define the minimum improvement that would
-justify maintaining another tool. Proceed only if the baseline shows a repeated
-failure or enough manual coordination cost to repay the tool's maintenance.
+Before the run, record the repository name, current backlog source, participating
+harnesses, and the minimum improvement that would justify maintaining another
+tool. Proceed only if the baseline shows a repeated failure or enough manual
+coordination cost to repay the tool's maintenance.
 
 **Stop condition:** if concurrent work is already reliable and cheap with current
 worktrees and conventions, do not build Agent Workboard.
@@ -157,19 +159,45 @@ existing branch, deletes an existing directory, or silently prunes worktrees.
 The adapter journals a pending local provision before invoking Git, reconciles it
 on restart, and does not expose the task to the harness until activation succeeds.
 
+Git refuses to check out one branch in two linked worktrees within the same clone.
+The adapter preserves that local guard and treats the refusal as an error. It is
+not part of the server-side claim proof: other hosts/clones do not share it, and
+claim branch names normally include a unique suffix.
+
 ### Attached worktree rules
 
 The adapter resolves `git rev-parse --show-toplevel`, verifies that it belongs to
-the configured repository, and records its branch and base commit. MVP attached
-mode requires a named branch and a clean worktree at claim start. This gives the
-claim an unambiguous before-state; overrides are deferred.
+the configured repository, and records its branch and base commit. It resolves
+`--git-dir` and `--git-common-dir` using absolute, canonical paths. Equal paths
+identify the primary checkout; MVP attached mode rejects it because a claim must
+not own the shared working directory. An explicit primary-checkout override is
+deferred.
+
+Attached mode requires a named branch and a clean linked worktree at claim start.
+This gives the claim an unambiguous before-state.
+
+### Git state definitions
+
+**Clean** means `git status --porcelain=v1 --untracked-files=all` returns no
+records. This includes staged, unstaged, and untracked non-ignored files. Do not
+use `git diff --quiet HEAD`; it misses untracked files.
+
+Ignored files are outside the Git submission contract and do not make a worktree
+dirty. Because MVP never deletes worktrees automatically, they remain available
+for inspection. The later cleanup command must surface ignored files before any
+destructive decision.
+
+Git stash is repository-global rather than worktree-local. The adapter never runs
+`git stash`. At activation it records the current `refs/stash` OID and a stash
+reflog fingerprint. If either changes during a claim, recovery cannot safely
+attribute the stash and requires human inspection; it may not auto-abandon.
 
 ### Submission and cleanup
 
 Submission requires:
 
 - the registered worktree still exists on the claiming host;
-- it is clean;
+- it is clean by the definition above;
 - `HEAD` differs from the recorded base commit;
 - the claim token matches and has not expired;
 - branch and head commit are recorded with the result summary.
@@ -227,12 +255,19 @@ or uncommitted changes.
 On the owning host, `workboard recover <item>` inspects the registered workspace:
 
 - existing work: reattach and resume with a new claim token;
-- clean and unchanged from base: safely abandon and return to `ready`;
-- missing workspace: record that fact and allow an explicit recovery decision;
+- clean and unchanged from base, with unchanged stash fingerprint: safely abandon
+  and return to `ready`;
+- changed stash state: require human inspection because stashes are repo-global;
+- `prunable` entry from `git worktree list --porcelain`: record that the path is
+  missing while Git metadata and the branch may remain, then require an explicit
+  human decision;
+- missing and unregistered workspace: record that distinct state and require an
+  explicit recovery decision;
 - dirty or committed partial work: refuse automatic abandonment.
 
 An admin can force abandonment, but the API and UI must state that this may orphan
-host-local work. No recovery operation deletes files.
+host-local work. No recovery operation deletes files, branches, worktree metadata,
+or stash entries, and it never runs `git worktree prune` automatically.
 
 ---
 
@@ -253,7 +288,8 @@ tracked with `PRAGMA user_version`.
 **`workspaces`**
 
 `id`, `item_id`, `claim_attempt`, `mode`, `repo_id`, `host_id`, `path`, `branch`,
-`base_commit`, `head_commit`, `state`, `created_at`, `submitted_at`.
+`base_commit`, `head_commit`, `git_dir`, `git_common_dir`, `stash_fingerprint`,
+`registration_state`, `state`, `created_at`, `submitted_at`.
 
 **Supporting tables**
 
@@ -430,17 +466,24 @@ Prove the risky mechanisms, not the packaging trivia:
 1. Three real client processes race `claim-next` through one HTTP server over 100
    items: exactly 100 unique claims, including an injected real event-loop yield.
 2. The guarded SQL remains correct if a second test connection races it.
-3. Each real harness that claims managed-mode support adopts its returned path;
-   a marker written by the harness lands in that worktree and not the original
-   checkout. Two harnesses then edit the same path without filesystem interference.
-4. Branch/path collisions fail without reset or deletion.
-5. `SIGKILL` an MCP adapter: renewal stops, expiry marks the item interrupted,
+3. Harness adoption matrix: each real harness that claims managed-mode support
+   adopts its returned path, and a marker written by that harness lands in the
+   worktree rather than the original checkout. Test each integration's actual
+   mechanism (for example Codex `-C` versus an inherited process cwd).
+4. Git isolation: two managed worktrees edit the same relative path without
+   changing each other's working directory or the primary checkout.
+5. Branch/path collisions and attempts to attach the primary checkout fail without
+   reset, deletion, or an implicit override.
+6. Clean-state tests prove staged, unstaged, and untracked files all block
+   submission and automatic abandonment.
+7. Stash changes and `prunable` worktree entries require explicit recovery.
+8. `SIGKILL` an MCP adapter: renewal stops, expiry marks the item interrupted,
    and the worktree remains on disk.
-6. Graceful adapter shutdown reports interruption immediately.
-7. Recovery resumes a dirty/committed worktree and safely abandons only an
+9. Graceful adapter shutdown reports interruption immediately.
+10. Recovery resumes a dirty/committed worktree and safely abandons only an
    unchanged one.
-8. Browser-side Markdown payloads remain inert with URL filtering.
-9. Official MCP SDK works from the compiled executable with a real harness.
+11. Browser-side Markdown payloads remain inert with URL filtering.
+12. Official MCP SDK works from the compiled executable with a real harness.
 
 Spike code is disposable. Preserve only results in `docs/spike-results.md`.
 
@@ -505,9 +548,12 @@ repositories, and additional build targets. Each needs evidence from dogfooding.
 | Retry safety | Lost-response simulation for claim/create/comment |
 | Worktree isolation | Two managed worktrees edit identical paths without filesystem interference |
 | Harness adoption | Codex, Claude, and Hermes write inside the claimed path or fall back to attached mode |
-| Git safety | Existing branch/path, dirty attach, detached HEAD, missing repo, failed add |
+| Git safety | Existing branch/path, primary checkout attach, detached HEAD, missing repo, failed add |
+| Clean definition | Staged, unstaged, and untracked files are detected with porcelain status |
+| Stash safety | Changed repo-global stash state blocks automatic abandonment |
+| Worktree registry | Present, `prunable`, and missing/unregistered states remain distinct |
 | Crash recovery | `SIGKILL`, server restart, host unavailable, dirty and committed partial work |
-| Submission | Dirty tree rejected; clean changed head recorded; repeat is idempotent |
+| Submission | Dirty/untracked tree rejected; clean changed head recorded; repeat is idempotent |
 | Persistence | Disk-backed WAL database, restart, migration, backup/restore equality |
 | MCP | Real Codex, Claude, and Hermes invocation, not only mocked protocol tests |
 | Browser | Playwright on compiled binary, including Markdown/XSS corpus and recovery UI |
@@ -524,7 +570,10 @@ Unit tests may use in-memory SQLite; durability and concurrency tests may not.
 - [ ] Three harnesses racing through REST never receive the same item.
 - [ ] Managed claims never share a working directory.
 - [ ] Every managed-mode harness proves subsequent commands run in the claimed path.
-- [ ] Attached claims validate repository, branch, and clean before-state.
+- [ ] Attached claims require a linked worktree and reject the primary checkout.
+- [ ] Clean checks detect staged, unstaged, and untracked non-ignored files.
+- [ ] Changed stash state blocks automatic abandonment or is explicitly resolved.
+- [ ] `prunable` worktrees are surfaced without automatic pruning.
 - [ ] The LLM never needs to call `renew`; the adapter maintains its lease.
 - [ ] Killing an adapter preserves its worktree and marks work interrupted.
 - [ ] Interrupted partial work can be located and resumed.
@@ -550,3 +599,5 @@ Unit tests may use in-memory SQLite; durability and concurrency tests may not.
    2-minute automatic heartbeat reasonable defaults after the hostile spike?
 5. What exact measured improvement over `docs/baseline.md` justifies continued
    maintenance after the one-week comparison?
+6. Which already-active repository and backlog will supply Phase 0, and what
+   evidence shows two or more harnesses already work there concurrently today?
