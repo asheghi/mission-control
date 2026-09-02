@@ -63,6 +63,7 @@ import {
   listParticipants,
 } from "../db/repositories/participants";
 import type { ParticipantRow } from "../db/repositories/participants";
+import type { EventPublisher } from "./events";
 
 // ---------------------------------------------------------------------------
 // Service input schemas (strict: unknown fields — including any actor-spoof
@@ -146,10 +147,13 @@ interface HistoryDraft {
 export class WorkboardService {
   private readonly db: Database;
   private readonly clock: Clock;
+  // Optional publisher; transports wire a broker to fan events out to SSE.
+  private readonly events: EventPublisher | undefined;
 
-  constructor(db: Database, clock: Clock = systemClock) {
+  constructor(db: Database, clock: Clock = systemClock, events?: EventPublisher) {
     this.db = db;
     this.clock = clock;
+    this.events = events;
   }
 
   // ------------------------------------------------------------------ reads
@@ -244,6 +248,8 @@ export class WorkboardService {
       });
       return row.id;
     })();
+    // Published only after the transaction committed.
+    this.events?.publish("item.created", itemId);
     return this.getItem(actor, itemId);
   }
 
@@ -340,6 +346,7 @@ export class WorkboardService {
       return changed;
     })();
 
+    if (changedFields.length > 0) this.events?.publish("item.updated", itemId);
     return { ...this.getItem(actor, itemId), changedFields };
   }
 
@@ -348,6 +355,7 @@ export class WorkboardService {
     parseInput(positiveIdSchema, itemId);
     const deleted = this.db.transaction(() => deleteItemRow(this.db, itemId))();
     if (!deleted) throw new NotFoundError("item", itemId);
+    this.events?.publish("item.deleted", itemId);
   }
 
   addComment(actor: Actor, itemId: number, input: unknown): { comment: CommentDto; mentionedParticipants: readonly ParticipantDto[] } {
@@ -371,6 +379,7 @@ export class WorkboardService {
       updateItemRow(this.db, itemId, {}, now);
       return { comment, mentioned };
     })();
+    this.events?.publish("comment.created", itemId);
     return {
       comment: toCommentDto(listJoinedComment(this.db, result.comment.id)),
       mentionedParticipants: result.mentioned.map(toParticipantDto),
@@ -390,6 +399,7 @@ export class WorkboardService {
         avatarColor: color,
         createdAt: now,
       });
+      this.events?.publish("participant.created", null);
       return toParticipantDto(row);
     } catch (error) {
       if (error instanceof Error && /UNIQUE constraint/.test(error.message)) {
@@ -404,7 +414,9 @@ export class WorkboardService {
     const parsed = parseInput(createLabelInputSchema, input);
     const now = this.clock.now();
     try {
-      return toLabelDto(createLabelRow(this.db, { name: parsed.name, color: parsed.color, createdAt: now }));
+      const row = createLabelRow(this.db, { name: parsed.name, color: parsed.color, createdAt: now });
+      this.events?.publish("label.created", null);
+      return toLabelDto(row);
     } catch (error) {
       if (error instanceof Error && /UNIQUE constraint/.test(error.message)) {
         throw new ConflictError("A label with that name already exists.");

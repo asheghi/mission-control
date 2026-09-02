@@ -2,6 +2,8 @@
 import { describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { WorkboardService } from "../../src/app/workboard";
+import { WorkboardEventBroker } from "../../src/app/events";
+import type { EventPublisher, WorkboardEvent } from "../../src/app/events";
 import type { Actor, Clock } from "../../src/domain/types";
 import { ConflictError, NotFoundError, ValidationError } from "../../src/domain/errors";
 import { withTempDatabase } from "../helpers/temp-dir";
@@ -18,9 +20,13 @@ interface Fixture {
   readonly agent: Actor;
 }
 
-function withFixture(fn: (fx: Fixture, db: Database) => void, clock: Clock = advancingClock()): void {
+function withFixture(
+  fn: (fx: Fixture, db: Database) => void,
+  clock: Clock = advancingClock(),
+  events?: EventPublisher,
+): void {
   withTempDatabase((db) => {
-    const service = new WorkboardService(db, clock);
+    const service = new WorkboardService(db, clock, events);
     const bootstrap: Actor = { participantId: 0, name: "bootstrap", kind: "human" };
     const alice = service.createParticipant(bootstrap, { name: "alice", kind: "human" });
     const bot = service.createParticipant(bootstrap, { name: "bot", kind: "agent" });
@@ -235,5 +241,70 @@ describe("WorkboardService transactional integrity", () => {
       expect(() => service.addComment(agent, item.item.id, { body: "cc @alice" })).toThrow(/forced failure/);
       expect((db.query("SELECT COUNT(*) AS n FROM comments").get() as { n: number }).n).toBe(0);
     });
+  });
+});
+
+describe("WorkboardService event publication", () => {
+  function flushMicrotasks(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  test("events are published only after commit and nothing on rollback", async () => {
+    const broker = new WorkboardEventBroker();
+    const received: WorkboardEvent[] = [];
+    withFixture(
+      ({ service, alice }, db) => {
+        // While delivering, the committed row must already be visible.
+        broker.subscribe((event) => {
+          received.push(event);
+          if (event.itemId !== null) service.getItem(alice, event.itemId);
+        });
+
+        // Rolled-back mutation: no events.
+        db.exec(
+          "CREATE TRIGGER force_mentions_fail BEFORE INSERT ON mentions BEGIN SELECT RAISE(ABORT, 'forced failure'); END;",
+        );
+        expect(() => service.createItem(alice, { title: "Broken", body: "ping @bot" })).toThrow(/forced failure/);
+
+        // Committed mutation: exactly one event, delivered after commit.
+        db.exec("DROP TRIGGER force_mentions_fail;");
+        service.createItem(alice, { title: "Works", body: "ping @bot" });
+      },
+      undefined,
+      broker,
+    );
+    await flushMicrotasks();
+    expect(received).toHaveLength(1);
+    expect(received[0]?.type).toBe("item.created");
+    expect(received[0]?.itemId).toBe(1);
+  });
+
+  test("mutation methods publish their event types", async () => {
+    const broker = new WorkboardEventBroker();
+    const types: string[] = [];
+    withFixture(
+      ({ service, alice, agent }) => {
+        broker.subscribe((event) => types.push(event.type));
+
+        service.createParticipant(alice, { name: "carol", kind: "human" });
+        service.createLabel(alice, { name: "bug", color: "#FF0000" });
+        const item = service.createItem(alice, { title: "T", labels: ["bug"], assigneeId: agent.participantId });
+        service.updateItem(alice, item.item.id, { status: "doing" });
+        service.addComment(agent, item.item.id, { body: "hi" });
+        service.updateItem(alice, item.item.id, { title: "T" }); // no-op: no event
+        service.deleteItem(alice, item.item.id);
+      },
+      undefined,
+      broker,
+    );
+    await flushMicrotasks();
+    expect(types).toEqual([
+      "participant.created",
+      "label.created",
+      "item.created",
+      "item.updated",
+      "comment.created",
+      "item.deleted",
+    ]);
   });
 });
