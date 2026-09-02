@@ -1,9 +1,12 @@
 node_modules/
 dist/
+.tmp/
 wb_data/
 spike/
 workboard
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.db
 *.db-wal
 *.db-shm

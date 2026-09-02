@@ -1,145 +1,67 @@
 # Agent Workboard
 
-A local coordination broker for coding agents working concurrently on one Git
-repository.
+A simple backlog for a project where humans **and** AI agents do the work.
 
-It assigns each task once, gives the claiming agent an isolated or explicitly
-attached Git worktree, and records the branch and commit produced by Codex CLI,
-Claude CLI, Hermes, or another harness.
+Add work items, assign them, comment on them, track them to done. The only
+difference from any other tracker: an assignee or an @mention can be an agent,
+and agents read and update the board through MCP instead of a browser.
 
-> **Status: final planning baseline, not built.** `PLAN.md` defines the evidence
-> gates and build order. The project stops before implementation if the baseline
-> does not show a real coordination problem.
+## Participants
 
-## What it fixes
+Everyone on the board is a participant with a `kind`:
 
-When several coding agents work on one repository, they can:
+| Kind | How they use it |
+|------|-----------------|
+| `human` | Web UI |
+| `agent` | MCP tools (Codex, Claude Code, Hermes, …) |
 
-- start the same task;
-- mutate the same working directory;
-- leave partial work that nobody can locate after a crash;
-- finish without recording which branch or commit contains the result.
+Assignment, @mentions, comments, and history work identically for both. An agent
+is not a special case in the data model — it is a row in `participants`.
 
-Agent Workboard coordinates those boundaries. It does not merge branches or
-prevent Git merge conflicts.
+## Work items
 
-## Core workflow
-
-```text
-ready -> claim -> provision/attach worktree -> work -> submit branch + HEAD
-                                           \-> interrupt -> recover/resume
+```
+todo → doing → done
+         └──→ blocked
 ```
 
-There are two workspace modes:
+Each item has a title, markdown body, status, priority, optional assignee, and
+optional labels. Comments are threaded under the item.
 
-- **Managed:** the local adapter creates a dedicated branch and `git worktree`.
-- **Attached:** an agent already inside a clean linked worktree registers it.
+## The loop
 
-Git operations happen in the local CLI/MCP adapter. The central server cannot
-create remote worktrees because repository paths are host-local.
+**Human:** creates an item, assigns it to `@claude`, writes what they want.
 
-Managed mode is enabled only for a harness integration that can bind subsequent
-commands to the new path and prove that it did so. Otherwise the harness starts in
-a prepared worktree and uses attached mode.
+**Agent:** starts a session, calls `my_work` — gets everything assigned to it or
+mentioning it. Picks one up, sets it to `doing`, does the work, comments with
+what it did, sets it to `done`.
 
-Attached mode rejects the repository's primary checkout so a claim cannot take
-ownership of the shared working directory. Here, **clean** means
-`git status --porcelain=v1 --untracked-files=all` is empty; staged, unstaged, and
-untracked non-ignored files all count.
+**Human:** sees it on the board, reads the comment, either closes it or reopens
+with feedback.
 
-## Shape
+Same loop either direction — an agent can file an item and @mention a human.
 
-```text
- browser ---------------------> workboard serve
-                                  REST + events
-                                  SQLite owner
+## Interfaces
 
- Codex / Claude / Hermes host
-   workboard mcp or CLI -------> workboard serve
-          |
-          +-- local repository
-          +-- isolated worktrees
-```
+- **Web** — board and list views, item detail, assign dropdown, comment box with
+  @mention autocomplete. This is how humans use it.
+- **MCP** — `list_work`, `my_work`, `get_work`, `create_work`, `update_work`,
+  `comment`. This is how agents use it.
+- **CLI** — the same operations for scripts and terminal humans.
 
-One compiled executable provides the server, CLI, and MCP adapter:
+## Deployment
+
+One binary, one SQLite file.
 
 ```bash
 ./workboard serve --dir ./wb_data --port 8765
 ```
 
-## Claim lifecycle
+Bun compiles the server, web assets, CLI, and MCP adapter into a single
+executable. Upgrading is replacing the binary.
 
-`claim_work` is one agent-facing operation:
+## Not doing
 
-1. reserve one `ready` item atomically;
-2. create or validate a local worktree;
-3. activate the claim with repository, host, branch, path, and base commit;
-4. renew the lease automatically in the adapter;
-5. submit a clean worktree's branch and head commit.
-
-The LLM does not call `renew` itself.
-
-If the adapter is killed, its lease eventually expires and the item becomes
-`interrupted`, not `ready`. The worktree may contain valuable partial work. A
-recovery command locates it and either resumes it or verifies that it is unchanged
-before returning the item to the queue.
-
-Repository-global stash changes and `prunable` worktree records require explicit
-human recovery. No automatic operation deletes a branch, worktree, stash entry, or
-Git worktree metadata.
-
-## Guarantees
-
-| Property | Mechanism |
-|----------|-----------|
-| One active claimant per item | Guarded SQLite `UPDATE ... RETURNING` |
-| No shared managed working directory | Worktree per managed claim plus verified harness path adoption |
-| Attached claim does not own shared checkout | Primary checkout rejected using Git-dir/common-dir identity |
-| Untracked work is not called clean | Porcelain status includes all non-ignored untracked files |
-| Lost claim response does not claim twice | Participant-scoped `request_id` replay |
-| LLM does not manage heartbeats | Local adapter renews in the background |
-| Crashed work remains discoverable | Expiry marks `interrupted`; workspace metadata persists |
-| Submitted result is exact | Branch, base commit, and head commit are recorded |
-| Stale human edits do not overwrite | Item revision plus `If-Match` |
-| Markdown is not executable HTML | React rendering without raw HTML plus URL allowlist |
-
-History attributes cooperating clients to their tokens. It is not tamper-proof
-against an agent with the same operating-system access as the database owner.
-
-## Statuses
-
-```text
-ready -> doing -> submitted
-           |
-           +-> interrupted -> resume or verified abandon
-```
-
-`submitted` means an agent produced a Git result. It does not mean that result is
-reviewed or merged.
-
-## Interfaces
-
-- **MCP:** primary agent interface using the official MCP SDK over stdio.
-- **CLI:** diagnostics and the same work operations for humans/scripts.
-- **Web:** added only after measured dogfooding passes; shows queue, active
-  workspaces, interruptions, submissions, and recovery warnings.
-
-The MCP adapter exposes coarse operations such as `claim_work`, `submit_work`,
-`release_work`, and `recover_work`. REST provisioning details remain internal.
-
-## Deployment model
-
-- one server process owns one SQLite database;
-- one deployment coordinates one logical Git repository;
-- local adapters may run on several hosts/clones;
-- paths are host-local metadata, while repo/branch/commit identities are portable;
-- Bun bundles the server, CLI, MCP SDK, and later web assets into one executable.
-
-## Deliberately deferred
-
-The first useful release has no themes, component playground, notifications,
-dependency graph, hierarchy, multi-repository board, automatic merge, automatic
-worktree deletion, or broad cross-platform service matrix.
-
-Those features must be earned by a baseline and a controlled comparison on real
-Codex, Claude, and Hermes work. See [PLAN.md](./PLAN.md).
+No sprints, epics, story points, workflows, custom fields, or permissions
+matrix. No git integration — the agent's harness already owns the repo. If this
+turns out to need those, they get added after it is being used, not before.

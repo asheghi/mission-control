@@ -1,0 +1,25 @@
+{
+  "name": "agent-workboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": "1.4.0"
+  },
+  "scripts": {
+    "dev": "bun --watch src/entry.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:e2e": "bun test test/e2e",
+    "build": "bun build ./src/entry.ts --compile --outfile dist/workboard"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.5",
+    "typescript": "5.7.3"
+  }
+}
