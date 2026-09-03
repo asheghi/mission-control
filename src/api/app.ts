@@ -1,4 +1,5 @@
-// Assembles the REST API fetch handler: routes, auth, error mapping, SSE.
+// Assembles the fetch handler: REST routes, auth, error mapping, SSE, the
+// stateless /mcp endpoint, and optional embedded static assets for the web UI.
 import { systemClock } from "../domain/types";
 import type { Clock } from "../domain/types";
 import type { AuthenticatedActor } from "../auth/service";
@@ -13,6 +14,11 @@ import { handleMcpRequest, MCP_ENDPOINT_PATH } from "./mcp-http";
 
 export const DEFAULT_MAX_BODY_BYTES = 262_144; // 256 KiB
 
+export interface StaticAsset {
+  readonly body: string;
+  readonly contentType: string;
+}
+
 export interface ApiHandlerDependencies {
   readonly service: WorkboardService;
   readonly broker: WorkboardEventBroker;
@@ -21,6 +27,8 @@ export interface ApiHandlerDependencies {
   readonly clock?: Clock;
   readonly maxBodyBytes?: number;
   readonly heartbeatMs?: number;
+  /** Embedded web shell, keyed by path (e.g. "/", "/assets/app.js"). */
+  readonly staticAssets?: Record<string, StaticAsset>;
 }
 
 export function createApiHandler(deps: ApiHandlerDependencies): (request: Request) => Promise<Response> {
@@ -43,7 +51,7 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
     ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
   });
 
-  return (request: Request) => {
+  return async (request: Request) => {
     const { pathname } = new URL(request.url);
     if (pathname === MCP_ENDPOINT_PATH) {
       return handleMcpRequest(
@@ -55,6 +63,18 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
         },
         request,
       );
+    }
+    if (pathname.startsWith("/api/")) return router.handle(request);
+
+    const assets = deps.staticAssets;
+    if (assets !== undefined) {
+      const asset = pathname === "/" ? assets["/"] : assets[pathname];
+      if (asset !== undefined) {
+        return new Response(asset.body, {
+          status: 200,
+          headers: { "Content-Type": asset.contentType, "Cache-Control": "no-cache" },
+        });
+      }
     }
     return router.handle(request);
   };
