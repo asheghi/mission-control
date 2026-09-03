@@ -49,6 +49,49 @@ export function errorBanner(error) {
 // --- Views -----------------------------------------------------------------
 // Views register themselves (board.js, list.js, detail.js).
 
+// --- Live updates (Task 16) -------------------------------------------------
+// One global SSE subscription per signed-in session: relevant events debounce
+// into a re-render of the current view. Typing is respected — if the user is
+// in a form field the refresh is skipped (the next event catches up).
+
+let liveFeed = null;
+let liveRefreshTimer = null;
+let liveReconnectTimer = null;
+
+function scheduleLiveRefresh() {
+  const active = document.activeElement;
+  const typing = active instanceof HTMLElement && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
+  if (typing) return;
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = setTimeout(() => render(), 250);
+}
+
+function startLiveFeed() {
+  if (liveFeed) return;
+  liveFeed = api.subscribeEvents({
+    onEvent: (event) => {
+      if (event.event.startsWith("item.") || event.event === "comment.created") scheduleLiveRefresh();
+    },
+    onClose: () => scheduleReconnect(),
+    onError: () => scheduleReconnect(),
+  });
+}
+
+function stopLiveFeed() {
+  clearTimeout(liveReconnectTimer);
+  if (liveFeed) {
+    liveFeed.close();
+    liveFeed = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (liveFeed) liveFeed = null;
+  if (!api.getToken()) return;
+  clearTimeout(liveReconnectTimer);
+  liveReconnectTimer = setTimeout(() => startLiveFeed(), 2000);
+}
+
 // --- Router ----------------------------------------------------------------
 
 function currentRoute() {
@@ -68,9 +111,11 @@ export function navigate(hash) {
 
 async function render() {
   if (!api.getToken()) {
+    stopLiveFeed();
     renderLogin();
     return;
   }
+  startLiveFeed();
   const { view, params } = currentRoute();
   renderShell(view);
   const content = document.getElementById("content");
@@ -117,6 +162,7 @@ function renderShell(view) {
 }
 
 function signOut() {
+  stopLiveFeed();
   api.setToken(null);
   renderLogin();
 }
