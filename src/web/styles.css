@@ -184,4 +184,30 @@ main.content { flex: 1; padding: 20px; max-width: 1200px; width: 100%; margin: 0
 
 .quick-add input { margin-top: 2px; font-size: 13px; }
 
-.placeholder { color: var(--muted); padding: 40px; text-align: center; }
+
+/* List (Task 14) */
+.list-toolbar { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.list-toolbar select { width: auto; min-width: 140px; }
+.list-toolbar input[type="search"] { width: 240px; }
+
+.list-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.list-table th, .list-table td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.list-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; }
+.list-table tbody tr { cursor: pointer; }
+.list-table tbody tr:hover, .list-table tbody tr:focus-visible { background: var(--panel-2); outline: none; }
+.cell-check { width: 34px; }
+.cell-check input { width: auto; }
+
+.list-footer { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+
+.selection-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+.selection-bar select { width: auto; }

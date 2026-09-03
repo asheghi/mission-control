@@ -16,6 +16,7 @@ import apiJs from "../../../src/web/api.js" with { type: "text" };
 import stylesCss from "../../../src/web/styles.css" with { type: "text" };
 import viewsJs from "../../../src/web/views.js" with { type: "text" };
 import boardJs from "../../../src/web/board.js" with { type: "text" };
+import listJs from "../../../src/web/list.js" with { type: "text" };
 
 const ASSETS = {
   "/": { body: indexHtml, contentType: "text/html; charset=utf-8" },
@@ -25,6 +26,7 @@ const ASSETS = {
   "/assets/api.js": { body: apiJs, contentType: "text/javascript; charset=utf-8" },
   "/assets/views.js": { body: viewsJs, contentType: "text/javascript; charset=utf-8" },
   "/assets/board.js": { body: boardJs, contentType: "text/javascript; charset=utf-8" },
+  "/assets/list.js": { body: listJs, contentType: "text/javascript; charset=utf-8" },
 };
 
 function startWithStatic(): { url: string; stop(): void } {

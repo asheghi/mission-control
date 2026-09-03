@@ -4,6 +4,7 @@
 import * as api from "./api.js";
 import { views, registerView } from "./views.js";
 import "./board.js";
+import "./list.js";
 
 const app = document.getElementById("app");
 
@@ -50,7 +51,6 @@ function mountPlaceholder(name) {
   return () => el("div", { class: "placeholder card" }, `${name} view is not wired up yet.`);
 }
 
-registerView("list", { title: "List", href: "#/list", mount: mountPlaceholder("List") });
 registerView("detail", { title: "Item", href: "#/item", hidden: true, mount: mountPlaceholder("Item detail") });
 
 // --- Router ----------------------------------------------------------------
