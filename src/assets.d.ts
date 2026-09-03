@@ -34,3 +34,8 @@ declare module "*web/list.js" {
   const content: string;
   export default content;
 }
+
+declare module "*web/detail.js" {
+  const content: string;
+  export default content;
+}

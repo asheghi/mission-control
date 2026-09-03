@@ -25,6 +25,7 @@ import apiJs from "./web/api.js" with { type: "text" };
 import viewsJs from "./web/views.js" with { type: "text" };
 import boardJs from "./web/board.js" with { type: "text" };
 import listJs from "./web/list.js" with { type: "text" };
+import detailJs from "./web/detail.js" with { type: "text" };
 
 const STATIC_ASSETS: Record<string, StaticAsset> = {
   "/": { body: indexHtml, contentType: "text/html; charset=utf-8" },
@@ -35,6 +36,7 @@ const STATIC_ASSETS: Record<string, StaticAsset> = {
   "/assets/views.js": { body: viewsJs, contentType: "text/javascript; charset=utf-8" },
   "/assets/board.js": { body: boardJs, contentType: "text/javascript; charset=utf-8" },
   "/assets/list.js": { body: listJs, contentType: "text/javascript; charset=utf-8" },
+  "/assets/detail.js": { body: detailJs, contentType: "text/javascript; charset=utf-8" },
 };
 
 interface ParsedArgs {

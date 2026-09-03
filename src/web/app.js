@@ -5,6 +5,7 @@ import * as api from "./api.js";
 import { views, registerView } from "./views.js";
 import "./board.js";
 import "./list.js";
+import "./detail.js";
 
 const app = document.getElementById("app");
 
@@ -46,12 +47,7 @@ export function errorBanner(error) {
 }
 
 // --- Views -----------------------------------------------------------------
-
-function mountPlaceholder(name) {
-  return () => el("div", { class: "placeholder card" }, `${name} view is not wired up yet.`);
-}
-
-registerView("detail", { title: "Item", href: "#/item", hidden: true, mount: mountPlaceholder("Item detail") });
+// Views register themselves (board.js, list.js, detail.js).
 
 // --- Router ----------------------------------------------------------------
 
