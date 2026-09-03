@@ -22,6 +22,8 @@ import indexHtml from "./web/index.html" with { type: "text" };
 import stylesCss from "./web/styles.css" with { type: "text" };
 import appJs from "./web/app.js" with { type: "text" };
 import apiJs from "./web/api.js" with { type: "text" };
+import viewsJs from "./web/views.js" with { type: "text" };
+import boardJs from "./web/board.js" with { type: "text" };
 
 const STATIC_ASSETS: Record<string, StaticAsset> = {
   "/": { body: indexHtml, contentType: "text/html; charset=utf-8" },
@@ -29,6 +31,8 @@ const STATIC_ASSETS: Record<string, StaticAsset> = {
   "/assets/styles.css": { body: stylesCss, contentType: "text/css; charset=utf-8" },
   "/assets/app.js": { body: appJs, contentType: "text/javascript; charset=utf-8" },
   "/assets/api.js": { body: apiJs, contentType: "text/javascript; charset=utf-8" },
+  "/assets/views.js": { body: viewsJs, contentType: "text/javascript; charset=utf-8" },
+  "/assets/board.js": { body: boardJs, contentType: "text/javascript; charset=utf-8" },
 };
 
 interface ParsedArgs {

@@ -1,7 +1,9 @@
 // Workboard web shell (Task 12): hash router, login, navigation, shared DOM
-// helpers. Board/list/detail views register themselves into `views` in later
-// tasks; live updates hook in via api.subscribeEvents.
+// helpers. Views register themselves via views.js; live updates hook in via
+// api.subscribeEvents.
 import * as api from "./api.js";
+import { views, registerView } from "./views.js";
+import "./board.js";
 
 const app = document.getElementById("app");
 
@@ -44,26 +46,23 @@ export function errorBanner(error) {
 
 // --- Views -----------------------------------------------------------------
 
-const views = {
-  board: { title: "Board", href: "#/board", mount: mountPlaceholder("Board", 13) },
-  list: { title: "List", href: "#/list", mount: mountPlaceholder("List", 14) },
-  detail: { title: "Item", href: "#/item", hidden: true, mount: mountPlaceholder("Item detail", 15) },
-};
-
 function mountPlaceholder(name) {
   return () => el("div", { class: "placeholder card" }, `${name} view is not wired up yet.`);
 }
+
+registerView("list", { title: "List", href: "#/list", mount: mountPlaceholder("List") });
+registerView("detail", { title: "Item", href: "#/item", hidden: true, mount: mountPlaceholder("Item detail") });
 
 // --- Router ----------------------------------------------------------------
 
 function currentRoute() {
   const hash = location.hash || "#/board";
   const segments = hash.replace(/^#\//, "").split("/");
-  if (segments[0] === "item") {
+  if (segments[0] === "item" && views.detail) {
     return { view: views.detail, params: { id: Number(segments[1]) } };
   }
-  if (views[segments[0]]) return { view: views[segments[0]], params: {} };
-  return { view: views.board, params: {} };
+  if (segments[0] && views[segments[0]]) return { view: views[segments[0]], params: {} };
+  return { view: views.board ?? Object.values(views)[0], params: {} };
 }
 
 export function navigate(hash) {
@@ -94,15 +93,14 @@ async function render() {
 }
 
 function renderShell(view) {
+  const current = location.hash || "#/board";
   const nav = el(
     "nav",
     {},
     Object.values(views)
       .filter((entry) => !entry.hidden)
       .map((entry) => {
-        const active = location.hash.startsWith(entry.href.replace("#/item", "#/item"))
-          ? entry.href === location.hash || (entry.href === "#/board" && !location.hash.startsWith("#/item") && location.hash.startsWith("#/board"))
-          : false;
+        const active = current === entry.href || (entry.href === "#/board" && current.startsWith("#/item"));
         return el("a", { href: entry.href, class: active ? "active" : "" }, entry.title);
       }),
   );

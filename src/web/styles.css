@@ -107,3 +107,81 @@ main.content { flex: 1; padding: 20px; max-width: 1200px; width: 100%; margin: 0
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 .toast.error { border-left-color: var(--danger); }
+
+/* Board (Task 13) */
+.board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 900px) { .board { grid-template-columns: repeat(2, 1fr); } }
+
+.board-column {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.board-column.drop-target { border-color: var(--accent); background: var(--accent-soft); }
+.board-column-title {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+}
+.board-column-title .count { color: var(--text); }
+.board-cards { display: flex; flex-direction: column; gap: 8px; min-height: 60px; flex: 1; }
+
+.board-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.board-card:hover, .board-card:focus-visible { border-color: var(--accent); outline: none; }
+.board-card.dragging { opacity: 0.5; }
+.board-card-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.board-card-title { font-size: 14px; }
+.board-card-bottom { display: flex; justify-content: space-between; align-items: center; }
+
+.chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.chip.p0 { color: #ff8f8f; border-color: #ff8f8f; }
+.chip.p1 { color: #ffc46b; border-color: #ffc46b; }
+.chip.p3 { color: #7fd1a8; border-color: #7fd1a8; }
+.label-chip { color: var(--text); }
+
+.avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.muted { color: var(--muted); font-size: 12px; }
+
+.quick-add input { margin-top: 2px; font-size: 13px; }
+
+.placeholder { color: var(--muted); padding: 40px; text-align: center; }

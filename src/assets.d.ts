@@ -19,3 +19,13 @@ declare module "*web/api.js" {
   const content: string;
   export default content;
 }
+
+declare module "*web/views.js" {
+  const content: string;
+  export default content;
+}
+
+declare module "*web/board.js" {
+  const content: string;
+  export default content;
+}
