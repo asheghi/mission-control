@@ -366,14 +366,24 @@ describe("REST API", () => {
         const reader = (response.body as ReadableStream<Uint8Array>).getReader();
         const decoder = new TextDecoder();
         let text = "";
+        // Single in-flight read, re-raced across ticks: issuing a new read
+        // per tick would orphan earlier queued reads on the stream.
+        let pending = reader.read();
         const readUntil = async (needle: string, deadlineMs: number): Promise<boolean> => {
           const deadline = Date.now() + deadlineMs;
           while (Date.now() < deadline && !text.includes(needle)) {
-            const chunk = await Promise.race([
-              reader.read(),
-              new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+            const result = await Promise.race([
+              pending,
+              new Promise<"tick">((resolve) => setTimeout(() => resolve("tick"), 50)),
             ]);
-            if (chunk !== "timeout" && chunk.value) text += decoder.decode(chunk.value, { stream: true });
+            if (result === "tick") continue;
+            pending = reader.read();
+            // After controller.abort() the outstanding read rejects with
+            // AbortError by design; keep it handled so it cannot surface as
+            // an unhandled rejection.
+            pending.catch(() => {});
+            if (result.done) break;
+            text += decoder.decode(result.value ?? new Uint8Array(), { stream: true });
           }
           return text.includes(needle);
         };

@@ -21,17 +21,4 @@ export async function runStdioMcpServer(service: WorkboardService, actor: Actor)
   });
 }
 
-/**
- * Resolves the stdio actor by participant name, creating it as an agent
- * attribution the first time it is used.
- */
-export function resolveStdioActor(service: WorkboardService, name: string): Actor {
-  const bootstrap: Actor = { participantId: 0, name: "system", kind: "human" };
-  const lowered = name.toLowerCase();
-  const existing = service.listParticipants(bootstrap).find((participant) => participant.name.toLowerCase() === lowered);
-  if (existing !== undefined) {
-    return { participantId: existing.id, name: existing.name, kind: existing.kind };
-  }
-  const created = service.createParticipant(bootstrap, { name, kind: "agent" });
-  return { participantId: created.id, name: created.name, kind: created.kind };
-}
+export { resolveLocalActor as resolveStdioActor } from "../app/local-actor";
