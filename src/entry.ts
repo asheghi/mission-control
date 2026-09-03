@@ -1,4 +1,4 @@
-const VERSION = "0.1.0";
+import { APP_VERSION as VERSION } from "./version";
 
 function printUsage(): void {
   console.error("Usage: workboard [--version]");

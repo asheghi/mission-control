@@ -1,5 +1,7 @@
 import { NotFoundError } from "../domain/errors";
 import type { WorkboardService } from "../app/workboard";
+import { resolveItemQuery } from "../app/item-query";
+import type { RawItemQuery } from "../app/item-query";
 import { jsonSuccess, readJsonBody } from "./response";
 import type { HttpRouter } from "./router";
 
@@ -10,15 +12,25 @@ export interface ItemRouteDeps {
 
 export function registerItemRoutes(router: HttpRouter, deps: ItemRouteDeps): void {
   router.add("GET", "/api/items", (ctx) => {
-    const { filter, resolveAssigneeName } = parseItemListFilter(ctx.url);
-    if (resolveAssigneeName !== undefined) {
+    const status = single(ctx.url, "status");
+    const assignee = single(ctx.url, "assignee");
+    const label = single(ctx.url, "label");
+    const q = single(ctx.url, "q");
+    const limit = single(ctx.url, "limit");
+    const cursor = single(ctx.url, "cursor");
+    const raw: RawItemQuery = {
+      ...(status !== undefined ? { status } : {}),
+      ...(assignee !== undefined ? { assignee } : {}),
+      ...(label !== undefined ? { label } : {}),
+      ...(q !== undefined ? { q } : {}),
+      ...(limit !== undefined ? { limit: Number(limit) } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
+    };
+
+    const { filter, emptyResult } = resolveItemQuery(deps.service, ctx.actor, raw);
+    if (emptyResult) {
       // Unknown assignee name is a filter, not an error: no matches.
-      const participants = deps.service.listParticipants(ctx.actor);
-      const match = participants.find((p) => p.name.toLowerCase() === resolveAssigneeName.toLowerCase());
-      if (match === undefined) {
-        return jsonSuccess([], { nextCursor: null }, ctx.requestId);
-      }
-      filter.assigneeId = match.id;
+      return jsonSuccess([], { nextCursor: null }, ctx.requestId);
     }
     const result = deps.service.listItems(ctx.actor, filter);
     return jsonSuccess(result.items, { nextCursor: result.nextCursor }, ctx.requestId);
@@ -69,47 +81,6 @@ export function registerItemRoutes(router: HttpRouter, deps: ItemRouteDeps): voi
 
 function single(url: URL, key: string): string | undefined {
   return url.searchParams.get(key) ?? undefined;
-}
-
-interface ParsedItemListFilter {
-  readonly filter: Record<string, unknown>;
-  readonly resolveAssigneeName?: string;
-}
-
-function parseItemListFilter(url: URL): ParsedItemListFilter {
-  const filter: Record<string, unknown> = {};
-
-  const status = single(url, "status");
-  if (status !== undefined) filter.status = status;
-
-  let resolveAssigneeName: string | undefined;
-  const assignee = single(url, "assignee");
-  if (assignee !== undefined) {
-    if (assignee === "unassigned") {
-      filter.unassigned = true;
-    } else if (/^\d+$/.test(assignee)) {
-      filter.assigneeId = Number(assignee);
-    } else {
-      resolveAssigneeName = assignee;
-    }
-  }
-
-  const label = single(url, "label");
-  if (label !== undefined) filter.labelName = label;
-
-  const q = single(url, "q");
-  if (q !== undefined) filter.q = q;
-
-  const limit = single(url, "limit");
-  if (limit !== undefined) filter.limit = Number(limit);
-
-  const cursor = single(url, "cursor");
-  if (cursor !== undefined) filter.cursor = cursor;
-
-  return {
-    filter,
-    ...(resolveAssigneeName !== undefined ? { resolveAssigneeName } : {}),
-  };
 }
 
 export function parseIdParam(raw: string | undefined): number {

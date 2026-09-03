@@ -9,6 +9,7 @@ import { registerItemRoutes } from "./items";
 import { registerParticipantRoutes } from "./participants";
 import { registerLabelRoutes } from "./labels";
 import { registerEventsRoute } from "./events";
+import { handleMcpRequest, MCP_ENDPOINT_PATH } from "./mcp-http";
 
 export const DEFAULT_MAX_BODY_BYTES = 262_144; // 256 KiB
 
@@ -42,5 +43,19 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
     ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
   });
 
-  return (request: Request) => router.handle(request);
+  return (request: Request) => {
+    const { pathname } = new URL(request.url);
+    if (pathname === MCP_ENDPOINT_PATH) {
+      return handleMcpRequest(
+        {
+          service: deps.service,
+          authenticate: deps.authenticate,
+          clock,
+          ...(deps.maxBodyBytes !== undefined ? { maxBodyBytes: deps.maxBodyBytes } : {}),
+        },
+        request,
+      );
+    }
+    return router.handle(request);
+  };
 }
