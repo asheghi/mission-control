@@ -3,6 +3,9 @@ export type WorkboardErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "PAYLOAD_TOO_LARGE"
+  | "METHOD_NOT_ALLOWED"
   | "INTERNAL";
 
 export class WorkboardError extends Error {
@@ -38,6 +41,24 @@ export class ConflictError extends WorkboardError {
 export class AuthenticationError extends WorkboardError {
   constructor() {
     super("UNAUTHENTICATED", "Authentication failed.");
+  }
+}
+
+export class ForbiddenError extends WorkboardError {
+  constructor(message = "Access is forbidden.") {
+    super("FORBIDDEN", message);
+  }
+}
+
+export class PayloadTooLargeError extends WorkboardError {
+  constructor() {
+    super("PAYLOAD_TOO_LARGE", "The request body is too large.");
+  }
+}
+
+export class MethodNotAllowedError extends WorkboardError {
+  constructor(message = "The HTTP method is not allowed.") {
+    super("METHOD_NOT_ALLOWED", message);
   }
 }
 

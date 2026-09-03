@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   AuthenticationError,
   ConflictError,
+  ForbiddenError,
   InternalError,
+  MethodNotAllowedError,
   NotFoundError,
+  PayloadTooLargeError,
   ValidationError,
   WorkboardError,
 } from "../../../src/domain/errors";
@@ -32,6 +35,13 @@ describe("workboard error taxonomy", () => {
 
   test("AuthenticationError carries UNAUTHENTICATED", () => {
     expect(new AuthenticationError().code).toBe("UNAUTHENTICATED");
+  });
+
+  test("ForbiddenError, PayloadTooLargeError, MethodNotAllowedError codes", () => {
+    expect(new ForbiddenError("origin rejected").code).toBe("FORBIDDEN");
+    expect(new ForbiddenError().message).toBe("Access is forbidden.");
+    expect(new PayloadTooLargeError().code).toBe("PAYLOAD_TOO_LARGE");
+    expect(new MethodNotAllowedError().code).toBe("METHOD_NOT_ALLOWED");
   });
 
   test("InternalError default and custom messages", () => {
