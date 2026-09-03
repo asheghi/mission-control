@@ -18,6 +18,7 @@ import type { StaticAsset } from "./api/app";
 import { handleMcpRequest } from "./api/mcp-http";
 import { runStdioMcpServer } from "./mcp/stdio";
 import { APP_VERSION } from "./version";
+import { backupDatabase, defaultBackupPath, restoreDatabase, runDoctor as doctorChecks } from "./maintenance/backup";
 import indexHtml from "./web/index.html" with { type: "text" };
 import stylesCss from "./web/styles.css" with { type: "text" };
 import appJs from "./web/app.js" with { type: "text" };
@@ -91,7 +92,7 @@ interface CommandContext {
 }
 
 function resolveDataDir(args: ParsedArgs): string {
-  return value(args, "data") ?? process.env.WORKBOARD_DATA_DIR ?? join(process.cwd(), "workboard-data");
+  return value(args, "dir") ?? value(args, "data") ?? process.env.WORKBOARD_DATA_DIR ?? join(process.cwd(), "workboard-data");
 }
 
 function openInitializedDb(ctx: CommandContext): Database {
@@ -382,9 +383,31 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
 }
 
 function runToken(ctx: CommandContext, rest: readonly string[]): number {
-  const args = parseArgs(rest, new Set(["for", "name"]));
-  const participantName = value(args, "for");
-  if (participantName === undefined) fail("--for <participant> is required");
+  const args = parseArgs(rest, new Set(["for", "participant", "name", "id"]));
+  const subcommand = args.positionals[0];
+
+  if (subcommand === "revoke") {
+    const idRaw = value(args, "id");
+    if (idRaw === undefined) fail("--id <token id> is required");
+    const id = Number(idRaw);
+    if (!Number.isInteger(id) || id <= 0) fail(`invalid token id: ${idRaw}`);
+    const db = openInitializedDb(ctx);
+    try {
+      db.run("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", [systemClock.now(), id]);
+      const changed = (db.query("SELECT changes() AS n").get() as { n: number }).n;
+      if (changed === 0) fail(`no active token with id ${id}`);
+      if (flag(ctx.globalArgs, "json")) printJson({ revoked: id });
+      else console.log(`Revoked token #${id}`);
+      return 0;
+    } finally {
+      db.close();
+    }
+  }
+
+  // `token create --participant NAME --name LABEL`; `token --for NAME` is the
+  // Task 11 spelling and keeps working.
+  const participantName = value(args, "participant") ?? value(args, "for");
+  if (participantName === undefined) fail("--participant <name> is required (or --for <name>)");
   const db = openInitializedDb(ctx);
   try {
     const service = new WorkboardService(db);
@@ -410,6 +433,78 @@ function runToken(ctx: CommandContext, rest: readonly string[]): number {
   }
 }
 
+function runParticipant(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set(["name", "kind"]));
+  const subcommand = args.positionals[0];
+  const db = openInitializedDb(ctx);
+  try {
+    const service = new WorkboardService(db);
+    const actor = resolveActor(service, ctx.globalArgs);
+    if (subcommand === "add") {
+      const name = value(args, "name");
+      const kind = value(args, "kind") ?? "agent";
+      if (name === undefined || name.length === 0) fail("--name <name> is required");
+      if (kind !== "human" && kind !== "agent") fail(`--kind must be human or agent, got '${kind}'`);
+      const created = service.createParticipant(actor, { name, kind });
+      if (flag(ctx.globalArgs, "json")) printJson(created);
+      else console.log(`Created participant #${created.id}: ${created.name} (${created.kind})`);
+      return 0;
+    }
+    // Default: list participants.
+    const participants = service.listParticipants(actor);
+    if (flag(ctx.globalArgs, "json")) printJson(participants);
+    else for (const participant of participants) console.log(`#${participant.id} ${participant.name} (${participant.kind})`);
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+function runBackup(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set(["output"]));
+  const output = value(args, "output") ?? defaultBackupPath(ctx.dataDir, new Date());
+  const db = openInitializedDb(ctx);
+  try {
+    backupDatabase(db, output);
+    if (flag(ctx.globalArgs, "json")) printJson({ backup: output });
+    else console.log(`Backup written to ${output}`);
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+function runRestore(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set(["input"]));
+  const input = value(args, "input") ?? args.positionals[0];
+  if (input === undefined) fail("--input <file> is required");
+  try {
+    restoreDatabase(ctx.dataDir, input, { force: flag(args, "force") });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  if (flag(ctx.globalArgs, "json")) printJson({ restored: true, dataDir: ctx.dataDir });
+  else console.log(`Restored ${input} into ${ctx.dataDir}`);
+  return 0;
+}
+
+function runDoctorCommand(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set(["host", "port"]));
+  const portRaw = value(args, "port") ?? "8765";
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) fail(`invalid port: ${portRaw}`);
+  const hostArg = value(args, "host");
+  const { healthy, checks } = doctorChecks(ctx.dataDir, {
+    ...(hostArg !== undefined ? { host: hostArg } : {}),
+    port,
+  });
+  for (const check of checks) {
+    console.log(`${check.ok ? "[ok]" : "[FAIL]"} ${check.name}: ${check.detail}`);
+  }
+  console.log(healthy ? "workboard: healthy" : "workboard: unhealthy");
+  return healthy ? 0 : 1;
+}
+
 // ---------------------------------------------------------------------------
 // Entry
 
@@ -422,7 +517,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
 
     // Global flags may appear before the command; skip them (and their values)
     // to find the command token.
-    const globalValueFlags = new Set(["--data", "--as"]);
+    const globalValueFlags = new Set(["--data", "--dir", "--as"]);
     let commandIndex = 0;
     while (commandIndex < argv.length) {
       const token = argv[commandIndex];
@@ -443,12 +538,13 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         : [...argv.slice(0, commandIndex), ...argv.slice(commandIndex + 1)];
 
     // Global flags may appear anywhere; carve them out for the shared context.
-    const globalArgs = parseArgs(rest, new Set(["data", "as"]));
+    const isGlobalValueFlag = (token: string | undefined): boolean => token === "--data" || token === "--dir" || token === "--as";
+    const globalArgs = parseArgs(rest, new Set(["data", "dir", "as"]));
     const ctx: CommandContext = { globalArgs, dataDir: resolveDataDir(globalArgs) };
     const commandArgs = rest.filter((token, index) => {
-      if (token === "--data" || token === "--as") return false;
+      if (isGlobalValueFlag(token)) return false;
       const previous = rest[index - 1];
-      return previous !== "--data" && previous !== "--as";
+      return !isGlobalValueFlag(previous);
     });
 
     switch (command) {
@@ -470,6 +566,14 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         return await runServeCommand(ctx, commandArgs);
       case "token":
         return runToken(ctx, commandArgs);
+      case "participant":
+        return runParticipant(ctx, commandArgs);
+      case "backup":
+        return runBackup(ctx, commandArgs);
+      case "restore":
+        return runRestore(ctx, commandArgs);
+      case "doctor":
+        return runDoctorCommand(ctx, commandArgs);
       case "help":
       case "--help":
       case "-h":
@@ -506,10 +610,15 @@ function printUsage(): void {
       "  update <id> [fields]        Patch fields (--title --body --status --priority --assignee --unassign --labels)",
       "  comment <id> <text>         Comment on an item (@name mentions notify)",
       "  serve [--host] [--port]     Run the HTTP server (REST + MCP)",
-      "  token --for <participant>   Issue an API token (printed once)",
+      "  participant add             Add a participant (--name <name> --kind human|agent); no args lists",
+      "  token create                Issue an API token (--participant <name> --name <label>)",
+      "  token revoke                Revoke a token (--id <id>)",
+      "  backup                      Consistent snapshot (--output <file>)",
+      "  restore                     Restore a backup (--input <file>, --force to overwrite)",
+      "  doctor                      Health checks (data dir, integrity, schema, FKs, counts, port)",
       "  mcp                         Serve MCP over stdio",
       "",
-      "Global options: --data <dir>  --as <participant>  --json  --version",
+      "Global options: --dir <path> (alias: --data)  --as <participant>  --json  --version",
     ].join("\n"),
   );
 }
