@@ -289,7 +289,9 @@ export class WorkboardService {
         changes.entries.push({ field: "priority", oldValue: String(current.priority), newValue: String(parsed.priority) });
       }
       if (parsed.assigneeId !== undefined) {
-        const nextAssignee = parsed.assigneeId;
+        // Validate existence here (like createItem) so an unknown id surfaces
+        // as 404 instead of a raw FOREIGN KEY constraint failure (500).
+        const nextAssignee = this.resolveOptionalAssignee(parsed.assigneeId);
         if (nextAssignee !== current.assignee_id) {
           changes.fields.assigneeId = nextAssignee;
           changed.push("assignee");

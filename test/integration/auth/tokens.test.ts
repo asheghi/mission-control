@@ -86,6 +86,31 @@ describe("authenticate", () => {
     });
   });
 
+  test("last-used touch is throttled to one write per interval", () => {
+    withTempDataDir((dir) => {
+      const db = initializeDatabase(dir);
+      try {
+        const { agent } = setup(db);
+        const issued = issueToken(db, { participantId: agent.id, name: "throttled", now: "2026-01-01T00:00:00.000Z" });
+        const digest = issued.token.secret_digest;
+
+        // First use after creation touches (no prior last_used_at).
+        authenticate(db, issued.plaintext, "2026-01-02T00:00:00.000Z");
+        expect(findTokenByDigest(db, digest)?.last_used_at).toBe("2026-01-02T00:00:00.000Z");
+
+        // 30 seconds later: within the interval, so the stored value stands.
+        authenticate(db, issued.plaintext, "2026-01-02T00:00:30.000Z");
+        expect(findTokenByDigest(db, digest)?.last_used_at).toBe("2026-01-02T00:00:00.000Z");
+
+        // 61 seconds after the last write: the touch fires again.
+        authenticate(db, issued.plaintext, "2026-01-02T00:01:01.000Z");
+        expect(findTokenByDigest(db, digest)?.last_used_at).toBe("2026-01-02T00:01:01.000Z");
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   test("malformed, unknown, and revoked tokens fail identically", () => {
     withTempDataDir((dir) => {
       const db = initializeDatabase(dir);

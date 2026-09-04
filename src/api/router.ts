@@ -4,6 +4,7 @@
 import type { Actor } from "../domain/types";
 import type { AuthenticatedActor } from "../auth/service";
 import { bearerToken } from "../auth/middleware";
+import { ValidationError } from "../domain/errors";
 import { jsonError, mapError, methodNotAllowed } from "./response";
 
 export interface RouteContext {
@@ -54,7 +55,17 @@ export class HttpRouter {
     const allowMethods = new Set<string>();
 
     for (const route of this.routes) {
-      const params = matchSegments(route.segments, pathSegments);
+      let params: Record<string, string> | null;
+      try {
+        params = matchSegments(route.segments, pathSegments);
+      } catch (error) {
+        // A malformed percent-escape in a matched path shape is a client
+        // error, not an internal one — report it in the standard envelope.
+        if (error instanceof ValidationError) {
+          return withRequestId(jsonError("VALIDATION", error.message, requestId), requestId);
+        }
+        throw error;
+      }
       if (params === null) continue;
       pathExists = true;
       allowMethods.add(route.method);
@@ -91,7 +102,12 @@ function matchSegments(routeSegments: readonly string[], pathSegments: readonly 
     const pathSegment = pathSegments[index];
     if (pathSegment === undefined) return null;
     if (routeSegment.startsWith(":")) {
-      params[routeSegment.slice(1)] = decodeURIComponent(pathSegment);
+      const raw = routeSegment.slice(1);
+      try {
+        params[raw] = decodeURIComponent(pathSegment);
+      } catch {
+        throw new ValidationError(`malformed percent-encoding in path segment "${pathSegment}"`);
+      }
     } else if (routeSegment !== pathSegment) {
       return null;
     }

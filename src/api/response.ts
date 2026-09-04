@@ -63,18 +63,45 @@ function jsonHeaders(requestId: string): Headers {
 }
 
 /**
- * Parses a JSON request body with a hard size bound. Oversized, empty, and
- * malformed bodies map to stable WorkboardErrors (413/400).
+ * Reads the request body as UTF-8 text with a hard byte cap enforced while
+ * streaming. Unlike a bare `request.text()`, an oversized or lying
+ * content-length body never gets fully buffered: the read aborts as soon as
+ * the running total exceeds maxBytes (413 to the caller via WorkboardError).
  */
-export async function readJsonBody(request: Request, maxBytes: number): Promise<unknown> {
+export async function readBodyText(request: Request, maxBytes: number): Promise<string> {
   const contentLength = request.headers.get("content-length");
   if (contentLength !== null && Number(contentLength) > maxBytes) {
     throw new PayloadTooLargeError();
   }
-  const text = await request.text();
-  if (Buffer.byteLength(text, "utf8") > maxBytes) {
-    throw new PayloadTooLargeError();
+  if (request.body === null) return "";
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let total = 0;
+  const chunks: string[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("payload too large").catch(() => {});
+        throw new PayloadTooLargeError();
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+  } finally {
+    reader.releaseLock();
   }
+  return chunks.join("");
+}
+
+/**
+ * Parses a JSON request body with a hard size bound. Oversized, empty, and
+ * malformed bodies map to stable WorkboardErrors (413/400).
+ */
+export async function readJsonBody(request: Request, maxBytes: number): Promise<unknown> {
+  const text = await readBodyText(request, maxBytes);
   if (text.trim().length === 0) {
     throw new ValidationError("A JSON request body is required.");
   }

@@ -79,6 +79,16 @@ describe("WorkboardService items", () => {
     });
   });
 
+  test("updateItem rejects unknown assignees instead of relying on the FK constraint", () => {
+    withFixture(({ service, alice }) => {
+      const created = service.createItem(alice, { title: "x" });
+      expect(() => service.updateItem(alice, created.item.id, { assigneeId: 999 })).toThrow(NotFoundError);
+      // Unassigning still works, and no history/timestamp churn leaks the
+      // failed attempt.
+      expect(service.updateItem(alice, created.item.id, { assigneeId: null }).item.assignee).toBeNull();
+    });
+  });
+
   test("updateItem applies only supplied fields and records diffs", () => {
     withFixture(({ service, alice, agent }) => {
       const created = service.createItem(alice, { title: "Original", body: "b", priority: 2 });

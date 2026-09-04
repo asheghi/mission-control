@@ -100,7 +100,9 @@ function currentRoute() {
   if (segments[0] === "item" && views.detail) {
     return { view: views.detail, params: { id: Number(segments[1]) } };
   }
-  if (segments[0] && views[segments[0]]) return { view: views[segments[0]], params: {} };
+  // Object.hasOwn: prototype keys ("constructor", "toString", …) must not be
+  // treated as view names for arbitrary #hash input.
+  if (segments[0] && Object.hasOwn(views, segments[0])) return { view: views[segments[0]], params: {} };
   return { view: views.board ?? Object.values(views)[0], params: {} };
 }
 

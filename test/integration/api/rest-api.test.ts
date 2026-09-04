@@ -355,6 +355,39 @@ describe("REST API", () => {
     });
   });
 
+  test("malformed percent-encoding maps to the 400 envelope, not a bare 500", async () => {
+    await withApi(async ({ url, aliceToken }) => {
+      const result = await probe(fetch(`${url}/api/items/%zz`, { headers: auth(aliceToken) }));
+      expect(result.status).toBe(400);
+      expect(result.body.error.code).toBe("VALIDATION");
+      expect(result.headers.get("X-Request-Id")).toBeTruthy();
+    });
+  });
+
+  test("patching an unknown assignee yields 404, not a foreign-key 500", async () => {
+    await withApi(async ({ url, aliceToken }) => {
+      const created = await probe(
+        fetch(`${url}/api/items`, {
+          method: "POST",
+          headers: { ...auth(aliceToken), "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "FK probe" }),
+        }),
+      );
+      expect(created.status).toBe(201);
+      const id = (created.body.data as { item: { id: number } }).item.id;
+
+      const patched = await probe(
+        fetch(`${url}/api/items/${id}`, {
+          method: "PATCH",
+          headers: { ...auth(aliceToken), "Content-Type": "application/json" },
+          body: JSON.stringify({ assigneeId: 999_999 }),
+        }),
+      );
+      expect(patched.status).toBe(404);
+      expect(patched.body.error.code).toBe("NOT_FOUND");
+    });
+  });
+
   test("SSE streams heartbeats and events, and abort cleans up", async () => {
     await withApi(
       async ({ url, service, aliceToken, broker, alice }) => {

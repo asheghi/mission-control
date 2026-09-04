@@ -14,6 +14,9 @@ export interface AuthenticatedActor extends Actor {
   readonly tokenId: number;
 }
 
+/** Minimum interval between last_used_at writes for one token. */
+export const TOKEN_TOUCH_INTERVAL_MS = 60_000;
+
 export interface IssuedToken {
   readonly token: TokenRow;
   // The plaintext secret, shown exactly once at creation.
@@ -70,7 +73,14 @@ export function authenticate(
   const participant = getParticipantById(db, matched.participant_id);
   if (participant === null) throw new AuthenticationError();
 
-  touchToken(db, matched.id, now);
+  // Throttle last_used_at writes: touching on every request turns all reads
+  // into WAL writes (single-writer contention). One refresh per interval is
+  // plenty for "when was this token last used".
+  const nowMs = Date.parse(now);
+  const lastUsedMs = matched.last_used_at === null ? Number.NaN : Date.parse(matched.last_used_at);
+  if (Number.isNaN(nowMs) || Number.isNaN(lastUsedMs) || nowMs - lastUsedMs >= TOKEN_TOUCH_INTERVAL_MS) {
+    touchToken(db, matched.id, now);
+  }
   return { participantId: participant.id, name: participant.name, kind: participant.kind, tokenId: matched.id };
 }
 

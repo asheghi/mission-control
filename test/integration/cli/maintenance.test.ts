@@ -9,6 +9,7 @@ import { runCli } from "../../../src/cli";
 import { initializeDatabase } from "../../../src/db/database";
 import { WorkboardService } from "../../../src/app/workboard";
 import { LOCAL_ACTOR_BOOTSTRAP } from "../../../src/app/local-actor";
+import { claimServePid, findRunningServePid, releaseServePid, servePidFilePath } from "../../../src/maintenance/serve-lock";
 
 function makeDir(): string {
   return mkdtempSync(join(tmpdir(), "wb-maint-"));
@@ -116,6 +117,68 @@ describe("backup and restore", () => {
       rmSync(join(backup, ".."), { recursive: true, force: true });
     }
   }, 20_000);
+
+  test("restore refuses while a live serve holds the data directory, even with --force", async () => {
+    const source = makeDir();
+    const target = makeDir();
+    const backup = join(makeDir(), "snap.db");
+    try {
+      await run(["init"], source);
+      await run(["add", "From backup"], source);
+      await run(["backup", "--output", backup], source);
+
+      await run(["init"], target);
+      await run(["add", "Existing data"], target);
+
+      // Simulate a live server by recording this (alive) test process PID.
+      writeFileSync(servePidFilePath(target), `${process.pid}\n`);
+
+      const refused = await run(["restore", "--input", backup, "--force"], target);
+      expect(refused.code).not.toBe(0);
+      expect(refused.stderr).toContain("serve");
+      expect(refused.stderr).toContain(String(process.pid));
+      expect(publicItems(target)).not.toBe(publicItems(source));
+    } finally {
+      rmSync(source, { recursive: true, force: true });
+      rmSync(target, { recursive: true, force: true });
+      rmSync(join(backup, ".."), { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+describe("serve pid lock", () => {
+  test("claim, discover, and release follow liveness and ownership rules", () => {
+    const dir = makeDir();
+    try {
+      expect(findRunningServePid(dir)).toBeNull();
+      expect(claimServePid(dir, process.pid)).toBeNull();
+      expect(findRunningServePid(dir)).toBe(process.pid);
+
+      // Re-claiming with our own PID is a no-op: no *other* server to report.
+      expect(claimServePid(dir, process.pid)).toBeNull();
+
+      // A genuinely different live server is reported to the caller.
+      const child = Bun.spawn(["sleep", "5"]);
+      try {
+        expect(claimServePid(dir, child.pid)).toBe(process.pid);
+        expect(findRunningServePid(dir)).toBe(child.pid);
+      } finally {
+        child.kill();
+      }
+
+      // A file with unparseable content is not a discoverable server.
+      writeFileSync(servePidFilePath(dir), "not-a-pid\n");
+      expect(findRunningServePid(dir)).toBeNull();
+
+      // Release removes the file only when it still records our own PID.
+      writeFileSync(servePidFilePath(dir), `${process.pid}\n`);
+      releaseServePid(dir, process.pid);
+      expect(existsSync(servePidFilePath(dir))).toBe(false);
+      releaseServePid(dir, process.pid); // no-op when already gone
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("doctor", () => {

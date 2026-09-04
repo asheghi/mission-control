@@ -12,6 +12,7 @@ import { Database as SqliteDatabase } from "bun:sqlite";
 import { databaseFilePath, initializeDatabase } from "../db/database";
 import { currentSchemaVersion } from "../db/migrate";
 import { migrations } from "../db/schema";
+import { findRunningServePid, servePidFilePath } from "./serve-lock";
 
 const SQLITE_HEADER = "SQLite format 3\0";
 const REQUIRED_TABLES = [
@@ -105,6 +106,16 @@ export function restoreDatabase(dataDir: string, backupPath: string, options: { 
   const target = databaseFilePath(dataDir);
   if (existsSync(target) && statSync(target).size > 0 && options.force !== true) {
     throw new Error(`target database already exists at ${target}; pass --force to overwrite`);
+  }
+  // A live serve holds the database open: overwriting the file under it leaves
+  // the server writing to the unlinked WAL and corrupting the restored image.
+  // --force means "overwrite an existing database", never "corrupt a live one".
+  const runningServe = findRunningServePid(dataDir);
+  if (runningServe !== null) {
+    throw new Error(
+      `refusing to restore: a workboard serve (pid ${runningServe}) holds ${dataDir} open — stop it first, ` +
+        `or remove ${servePidFilePath(dataDir)} if that PID is stale`,
+    );
   }
 
   mkdirSync(dataDir, { recursive: true });

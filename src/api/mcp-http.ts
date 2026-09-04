@@ -9,7 +9,7 @@ import { ForbiddenError } from "../domain/errors";
 import type { WorkboardService } from "../app/workboard";
 import { bearerToken } from "../auth/middleware";
 import type { Authenticator } from "./router";
-import { jsonError, mapError } from "./response";
+import { jsonError, mapError, readBodyText } from "./response";
 import { buildMcpServer } from "../mcp/tools";
 
 export const MCP_ENDPOINT_PATH = "/mcp";
@@ -49,19 +49,20 @@ export async function handleMcpRequest(deps: McpHttpDependencies, request: Reque
       throw new ForbiddenError("This origin is not allowed to use the MCP endpoint.");
     }
 
-    const raw = await request.text();
+    // Authenticate before consuming the body: an unauthenticated caller gets
+    // 401 without the server ever buffering its payload.
+    const actor = deps.authenticate(bearerToken(request), (deps.clock ?? systemClock).now());
+
+    // Stream the body under a hard byte cap (readBodyText aborts past the
+    // limit), and count bytes — not UTF-16 code units — against maxBytes.
     const maxBytes = deps.maxBodyBytes ?? DEFAULT_MCP_MAX_BODY_BYTES;
-    if (raw.length > maxBytes) {
-      return jsonError("PAYLOAD_TOO_LARGE", "The request body is too large.", requestId);
-    }
+    const raw = await readBodyText(request, maxBytes);
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
       return jsonError("VALIDATION", "Malformed JSON body.", requestId);
     }
-
-    const actor = deps.authenticate(bearerToken(request), (deps.clock ?? systemClock).now());
 
     // Stateless 2025-era pattern (proven by the Task 1 spike): a fresh server
     // and transport per POST; the absent sessionIdGenerator disables session

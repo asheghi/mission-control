@@ -210,7 +210,7 @@ async function mount(params, container) {
     const caret = textarea.selectionStart ?? 0;
     const before = textarea.value.slice(0, caret);
     const at = before.lastIndexOf("@");
-    if (at === -1 || /\\s/.test(before.slice(at + 1))) {
+    if (at === -1 || /\s/.test(before.slice(at + 1))) {
       closeMentions();
       return;
     }

@@ -12,6 +12,7 @@ import { WorkboardService } from "./app/workboard";
 import { WorkboardEventBroker } from "./app/events";
 import { authenticate, issueToken } from "./auth/service";
 import { initializeDatabase } from "./db/database";
+import { claimServePid, releaseServePid } from "./maintenance/serve-lock";
 import type { Database } from "bun:sqlite";
 import { createApiHandler } from "./api/app";
 import type { StaticAsset } from "./api/app";
@@ -349,6 +350,10 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
   if (!Number.isInteger(port) || port < 0 || port > 65_535) fail(`invalid port: ${portRaw}`);
 
   const db = initializeDatabase(ctx.dataDir);
+  const otherServe = claimServePid(ctx.dataDir, process.pid);
+  if (otherServe !== null) {
+    console.error(`[workboard] warning: another serve (pid ${otherServe}) is already using ${ctx.dataDir}`);
+  }
   try {
     const clock: Clock = systemClock;
     const broker = new WorkboardEventBroker(clock);
@@ -378,6 +383,7 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
     });
     return 0;
   } finally {
+    releaseServePid(ctx.dataDir, process.pid);
     db.close();
   }
 }

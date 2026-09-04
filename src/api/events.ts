@@ -24,52 +24,64 @@ export function registerEventsRoute(router: HttpRouter, deps: EventRouteDeps): v
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let closed = false;
 
-    const stream = new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        const send = (chunk: string): void => {
-          if (closed) return;
-          controller.enqueue(encoder.encode(chunk));
-        };
-        const cleanup = (): void => {
-          if (closed) return;
-          closed = true;
-          if (heartbeat !== undefined) clearInterval(heartbeat);
-          unsubscribe();
-          try {
-            controller.close();
-          } catch {
-            // Already closed by the runtime on client disconnect.
-          }
-        };
-
-        ctx.request.signal.addEventListener("abort", cleanup);
-        send(": connected\n\n");
-
-        unsubscribe = deps.broker.subscribe(
-          (event) => {
+    // High-water mark 64: allow a bounded backlog of chunks before the
+    // slow-consumer disconnect in send() engages. The default strategy (1)
+    // would trip on the very first chunk of a healthy stream.
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start: (controller) => {
+          const send = (chunk: string): void => {
+            if (closed) return;
+            controller.enqueue(encoder.encode(chunk));
+            // enqueue() never throws for a slow consumer — it buffers. Treat a
+            // non-positive desiredSize as a stalled reader and disconnect, so
+            // the broker's bounded-queue guarantee holds at the last hop too.
+            if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+              cleanup();
+            }
+          };
+          const cleanup = (): void => {
+            if (closed) return;
+            closed = true;
+            if (heartbeat !== undefined) clearInterval(heartbeat);
+            unsubscribe();
             try {
-              send(formatSseEvent(event));
+              controller.close();
+            } catch {
+              // Already closed by the runtime on client disconnect.
+            }
+          };
+
+          ctx.request.signal.addEventListener("abort", cleanup);
+          send(": connected\n\n");
+
+          unsubscribe = deps.broker.subscribe(
+            (event) => {
+              try {
+                send(formatSseEvent(event));
+              } catch {
+                cleanup();
+              }
+            },
+            cleanup, // broker overflow/close disconnects this consumer
+          );
+
+          heartbeat = setInterval(() => {
+            try {
+              send(": heartbeat\n\n");
             } catch {
               cleanup();
             }
-          },
-          cleanup, // broker overflow/close disconnects this consumer
-        );
-
-        heartbeat = setInterval(() => {
-          try {
-            send(": heartbeat\n\n");
-          } catch {
-            cleanup();
-          }
-        }, heartbeatMs);
+          }, heartbeatMs);
+        },
+        cancel: () => {
+          closed = true;
+          if (heartbeat !== undefined) clearInterval(heartbeat);
+          unsubscribe();
+        },
       },
-      cancel: () => {
-        closed = true;
-        if (heartbeat !== undefined) clearInterval(heartbeat);
-        unsubscribe();
-      },
-    });
+      { highWaterMark: 64 },
+    );
 
     return new Response(stream, {
       status: 200,

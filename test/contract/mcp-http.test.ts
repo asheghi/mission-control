@@ -211,4 +211,36 @@ describe("stateless MCP HTTP endpoint", () => {
       expect(rejected).toBe(true);
     });
   });
+
+  test("authenticates before consuming the body: unauthenticated oversize gets 401", async () => {
+    await withMcpServer(async ({ url }) => {
+      const hugePadding = "x".repeat(1_200_000);
+      const response = await fetch(`${url}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", padding: hugePadding }),
+      });
+      expect(response.status).toBe(401);
+    });
+  });
+
+  test("the body cap counts bytes, not UTF-16 code units", async () => {
+    await withMcpServer(async ({ url, aliceToken }) => {
+      // "€" is 3 bytes in UTF-8: ~1.2 MB of bytes but only ~400k code units, so
+      // only a byte-accurate cap rejects this as 413.
+      const multibytePadding = "€".repeat(400_000);
+      const response = await fetch(`${url}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${aliceToken}`,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", padding: multibytePadding }),
+      });
+      expect(response.status).toBe(413);
+      const payload = (await response.json()) as { error?: { code?: string } };
+      expect(payload.error?.code).toBe("PAYLOAD_TOO_LARGE");
+    });
+  });
 });
