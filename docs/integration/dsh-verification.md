@@ -22,6 +22,7 @@ tokens never leave the host.
 | D7 | Token revocation | `token revoke --id 2` (integration-dsh) → next `my_work` fails immediately, verbatim `UNAUTHENTICATED` from the agent; no partial bookkeeping. |
 | D7 | Rotation | Env-file swap + service restart moved the bridge from the `dsh-agent` token to the `integration-dsh` token: previous turn all calls failed closed `UNAUTHENTICATED`, after rotation the same session completed the full lifecycle (D6). |
 | D7 | Duplicate serverName | Live probe mount of `workboard-stdio` then `workboard-agent` in ONE composition: second variant refused ("serverName \"workboard\" collides with an existing mcp-client instance"), first mounted OK. |
+| D7 | stdio disposal | The D3 probe session mounted `workboard-stdio` (child spawned at mount); after the session exited, `pgrep -af "workboard mcp"` shows no orphan child — only the systemd `serve` process remains. |
 | D7 | Timeout/cancel + reconnect config | `toolCallTimeoutMs: 60000`, `reconnect{enabled,500,30000,10}` accepted by the bridge schema at mount (standing OK); HTTP failures retry per request (documented in bridge README §115); lay D6/D7 restart test exercised the reconnect path live. Body/read hardening of the server itself covered by repo tests (401-before-read, 413 maladjusted, SSE slow-consumer disconnect). |
 
 Residual notes:
