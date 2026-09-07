@@ -60,6 +60,11 @@ One binary, one SQLite file.
 Bun compiles the server, web assets, CLI, and MCP adapter into a single
 executable. Upgrading is replacing the binary.
 
+## Documentation
+
+Full usage guide — setup, CLI, web UI, MCP tools for agents, tokens, and
+operations: **[docs/manual.md](docs/manual.md)**.
+
 ## Not doing
 
 No sprints, epics, story points, workflows, custom fields, or permissions
