@@ -255,9 +255,12 @@ async function mount(params, container) {
   }
 
   function renderHistory() {
+    // Newest first: the API returns history in chronological order; reverse a
+    // copy for display without mutating the state.
+    const entries = [...state.history].reverse();
     historyNode.replaceChildren(
       el("h3", {}, "History"),
-      ...state.history.map((entry) => {
+      ...entries.map((entry) => {
         const change =
           entry.oldValue === null && entry.newValue === null
             ? entry.field
