@@ -75,7 +75,7 @@ async function mount(params, container) {
 
   const titleNode = el("h1", { class: "detail-title" });
   const metaNode = el("div", { class: "detail-meta muted" });
-  const bodyNode = el("div", { class: "card detail-body" });
+  const bodyNode = el("div", { class: "detail-body-text" });
   const commentsNode = el("div", { class: "detail-comments" });
   const historyNode = el("div", { class: "card detail-history" });
 
@@ -113,6 +113,8 @@ async function mount(params, container) {
 
   function renderDetail() {
     const item = state.item;
+    titleArea.replaceChildren(titleNode, titleEditButton);
+    titleEditButton.disabled = false;
     titleNode.textContent = item.title;
     metaNode.replaceChildren(
       el("span", { class: "chip" }, item.status),
@@ -122,9 +124,121 @@ async function mount(params, container) {
     statusSelect.value = item.status;
     prioritySelect.value = String(item.priority);
     assigneeSelect.value = item.assignee ? String(item.assignee.id) : "";
-    bodyNode.replaceChildren(renderMarkdown(item.body || "(no description)"));
+    renderBody();
     renderComments();
     renderHistory();
+  }
+
+  // --- Inline editors for title and description ------------------------------
+
+  function buildInlineEditor(options) {
+    const multiline = options.multiline === true;
+    const input = multiline
+      ? el("textarea", { rows: "6", class: "inline-editor-textarea", placeholder: options.placeholder, "aria-label": options.label })
+      : el("input", { type: "text", class: "inline-editor-input", placeholder: options.placeholder, "aria-label": options.label });
+    input.value = options.value ?? "";
+    const buttonRow = el("div", { class: "inline-editor-actions" });
+    const saveButton = el("button", { type: "button", class: "primary" }, "Save");
+    const cancelButton = el("button", { type: "button", class: "ghost" }, "Cancel");
+    buttonRow.append(el("span", { class: "muted" }, options.hint), cancelButton, saveButton);
+
+    function submit() {
+      // Real double-submit guard: block extra PATCHes while one is in flight;
+      // onSave calls the callback to re-enable after a rejected save.
+      saveButton.disabled = true;
+      options.onSave(input.value, () => {
+        saveButton.disabled = false;
+        input.focus();
+      });
+    }
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        options.onCancel();
+        return;
+      }
+      const isEnter = event.key === "Enter";
+      const wantsSave = multiline ? isEnter && (event.ctrlKey || event.metaKey) : isEnter && !event.shiftKey;
+      if (wantsSave && !saveButton.disabled) {
+        event.preventDefault();
+        submit();
+      }
+    });
+    saveButton.addEventListener("click", submit);
+    cancelButton.addEventListener("click", () => options.onCancel());
+    // Keyboard users land on the page top once the clicked button is removed;
+    // focus once the editor is actually attached (queueMicrotask runs after
+    // the caller's replaceChildren).
+    queueMicrotask(() => {
+      input.focus();
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+    });
+    return el("div", { class: "inline-editor" }, input, buttonRow);
+  }
+
+  function beginTitleEdit() {
+    if (state.item === null || titleEditButton.disabled) return;
+    const original = state.item.title;
+    titleArea.replaceChildren(
+      buildInlineEditor({
+        value: original,
+        placeholder: "Item title",
+        label: "Edit item title",
+        hint: "Enter to save · Esc to cancel",
+        onCancel: () => {
+          renderDetail();
+          titleEditButton.focus();
+        },
+        onSave: (value, resume) => {
+          const trimmed = value.trim();
+          if (trimmed.length === 0) {
+            toast("Title cannot be empty", true);
+            resume();
+            return;
+          }
+          if (trimmed === original) {
+            renderDetail();
+            titleEditButton.focus();
+            return;
+          }
+          patch({ title: trimmed }).then(() => titleEditButton.focus());
+          titleEditButton.disabled = true;
+        },
+      }),
+    );
+  }
+
+  function beginBodyEdit() {
+    if (state.item === null || bodyEditButton.disabled) return;
+    const original = state.item.body;
+    bodyNode.replaceChildren(
+      buildInlineEditor({
+        value: original,
+        placeholder: "Describe the work (markdown-lite: *italic*, **bold**, `code`, links)",
+        label: "Edit item description",
+        hint: "Ctrl+Enter to save · Esc to cancel",
+        multiline: true,
+        onCancel: () => {
+          renderDetail();
+          bodyEditButton.focus();
+        },
+        onSave: (value, resume) => {
+          if (value === original) {
+            renderDetail();
+            bodyEditButton.focus();
+            return;
+          }
+          patch({ body: value }).then(() => bodyEditButton.focus());
+          bodyEditButton.disabled = true;
+        },
+      }),
+    );
+  }
+
+  function renderBody() {
+    bodyEditButton.disabled = state.item === null;
+    bodyNode.replaceChildren(renderMarkdown(state.item?.body ? state.item.body : "(no description)"));
   }
 
   function renderComments() {
@@ -246,8 +360,7 @@ async function mount(params, container) {
     }
   });
 
-  const submitButton = el("button", { class: "primary" }, "Comment");
-  async function submitComment() {
+  const submitButton = el("button", { class: "primary" }, "Comment");  async function submitComment() {
     const body = textarea.value.trim();
     if (!body) return;
     submitButton.disabled = true;
@@ -265,6 +378,18 @@ async function mount(params, container) {
     }
   }
   submitButton.addEventListener("click", submitComment);
+
+  const titleEditButton = el("button", { class: "ghost ghost--small", "aria-label": "Edit title" }, "Edit title");
+  titleEditButton.addEventListener("click", beginTitleEdit);
+  const bodyEditButton = el("button", { class: "ghost ghost--small", "aria-label": "Edit description" }, "Edit description");
+  bodyEditButton.addEventListener("click", beginBodyEdit);
+  const titleArea = el("div", { class: "detail-title-area" }, titleNode, titleEditButton);
+  const bodyCard = el(
+    "div",
+    { class: "card detail-body" },
+    el("div", { class: "detail-body-head" }, bodyEditButton),
+    bodyNode,
+  );
 
   const deleteButton = el("button", { class: "danger" }, "Delete item");
   deleteButton.addEventListener("click", async () => {
@@ -295,7 +420,7 @@ async function mount(params, container) {
     el(
       "div",
       { class: "detail" },
-      el("div", { class: "detail-head" }, titleNode, deleteButton),
+      el("div", { class: "detail-head" }, titleArea, deleteButton),
       metaNode,
       el(
         "div",
@@ -304,7 +429,7 @@ async function mount(params, container) {
         el("label", {}, "Priority", prioritySelect),
         el("label", {}, "Assignee", assigneeSelect),
       ),
-      bodyNode,
+      bodyCard,
       el("div", { class: "composer card" }, textarea, mentionList, el("div", { class: "composer-actions" }, el("span", { class: "muted" }, "Ctrl+Enter to post"), submitButton)),
       commentsNode,
       historyNode,
