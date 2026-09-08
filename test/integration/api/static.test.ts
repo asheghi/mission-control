@@ -71,7 +71,9 @@ describe("static web shell", () => {
 
       const apiJsServed = await fetch(`${server.url}/assets/api.js`);
       expect(apiJsServed.status).toBe(200);
-      expect(await apiJsServed.text()).toContain("sessionStorage");
+      const servedApiJs = await apiJsServed.text();
+      expect(servedApiJs).toContain("localStorage");
+      expect(servedApiJs).toContain("sessionStorage");
 
       const css = await fetch(`${server.url}/assets/styles.css`);
       expect(css.status).toBe(200);

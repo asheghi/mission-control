@@ -1,5 +1,7 @@
 // Workboard API client (browser). Thin typed wrapper over the REST surface:
-// bearer token from sessionStorage, stable error envelope parsing.
+// bearer token from localStorage (survives server restarts, tabs, and browser
+// restarts; sessionStorage is only read to migrate tokens from older builds),
+// stable error envelope parsing.
 
 const TOKEN_KEY = "workboard.token";
 
@@ -14,12 +16,15 @@ export class ApiError extends Error {
 }
 
 export function getToken() {
-  return sessionStorage.getItem(TOKEN_KEY);
+  return localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
 }
 
 export function setToken(token) {
-  if (token) sessionStorage.setItem(TOKEN_KEY, token);
-  else sessionStorage.removeItem(TOKEN_KEY);
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else {
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+  }
 }
 
 export async function api(path, options = {}) {
