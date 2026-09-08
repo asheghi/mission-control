@@ -1,11 +1,17 @@
 // Item detail (Task 15): fields + quick patch controls, markdown-safe body
 // and comment rendering (user text is never injected as HTML), comment
 // composer with @mentions autocomplete, change history timeline.
+// Title and description autosave (no save buttons): the title is always an
+// input, the description uses Preview/Edit tabs (Preview is the default).
+// Description history entries render as a collapsed git-style diff row that
+// expands on click.
 import * as api from "./api.js";
 import { el, toast, navigate, errorBanner } from "./app.js";
 import { registerView } from "./views.js";
 
 const STATUSES = ["todo", "doing", "blocked", "done"];
+const TITLE_DEBOUNCE_MS = 600;
+const BODY_DEBOUNCE_MS = 700;
 
 // --- Safe markdown-lite -----------------------------------------------------
 // Everything is built with textContent; the only HTML-ish syntax interpreted
@@ -61,6 +67,60 @@ function formatTime(iso) {
   }
 }
 
+// --- Line diff (git-style) ---------------------------------------------------
+// LCS-based line diff; entries that would blow the DP budget fall back to one
+// wholesale removal block plus one wholesale addition block.
+
+function lcsOps(a, b) {
+  const n = a.length;
+  const m = b.length;
+  if (n * m > 400_000) return null;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      ops.push({ type: "ctx", line: a[i] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ type: "del", line: a[i] });
+      i += 1;
+    } else {
+      ops.push({ type: "add", line: b[j] });
+      j += 1;
+    }
+  }
+  while (i < n) ops.push({ type: "del", line: a[i++] });
+  while (j < m) ops.push({ type: "add", line: b[j++] });
+  return ops;
+}
+
+function diffLines(oldText, newText) {
+  const ops = lcsOps(String(oldText ?? "").split("\n"), String(newText ?? "").split("\n"));
+  if (ops !== null) return ops;
+  const ops2 = [];
+  for (const line of String(oldText ?? "").split("\n")) ops2.push({ type: "del", line });
+  for (const line of String(newText ?? "").split("\n")) ops2.push({ type: "add", line });
+  return ops2;
+}
+
+function diffCounts(ops) {
+  let added = 0;
+  let removed = 0;
+  for (const op of ops) {
+    if (op.type === "add") added += 1;
+    else if (op.type === "del") removed += 1;
+  }
+  return { added, removed };
+}
+
 // --- Detail view -------------------------------------------------------------
 
 async function mount(params, container) {
@@ -73,9 +133,7 @@ async function mount(params, container) {
   const state = { item: null, comments: [], history: [], participants: [] };
   state.participants = (await api.listParticipants().catch(() => ({ data: [] }))).data;
 
-  const titleNode = el("h1", { class: "detail-title" });
   const metaNode = el("div", { class: "detail-meta muted" });
-  const bodyNode = el("div", { class: "detail-body-text" });
   const commentsNode = el("div", { class: "detail-comments" });
   const historyNode = el("div", { class: "card detail-history" });
 
@@ -111,11 +169,194 @@ async function mount(params, container) {
   prioritySelect.addEventListener("change", () => patch({ priority: Number(prioritySelect.value) }));
   assigneeSelect.addEventListener("change", () => patch({ assigneeId: assigneeSelect.value === "" ? null : Number(assigneeSelect.value) }));
 
+  // --- Title: always-editable input with autosave ----------------------------
+
+  const titleInput = el("input", { type: "text", class: "detail-title-input", "aria-label": "Item title", autocomplete: "off" });
+  const titleState = el("span", { class: "detail-save-state muted", "aria-live": "polite" });
+  let lastSavedTitle = "";
+  let titleSaving = false;
+  let titleQueued = false;
+  let titleTimer = null;
+
+  function setTitleStatus(text) {
+    titleState.textContent = text;
+  }
+
+  async function saveTitleNow() {
+    if (titleSaving) {
+      titleQueued = true; // another change is waiting; run again after this one
+      return;
+    }
+    const value = titleInput.value.trim();
+    if (value.length === 0) {
+      // The API rejects blank titles; keep the draft, never send it.
+      setTitleStatus("Title cannot be empty");
+      return;
+    }
+    if (value === lastSavedTitle) {
+      setTitleStatus("");
+      return;
+    }
+    titleSaving = true;
+    setTitleStatus("Saving…");
+    try {
+      await api.updateItem(id, { title: value });
+      lastSavedTitle = value;
+      if (state.item !== null) state.item.title = value;
+      setTitleStatus("Saved ✓");
+    } catch (error) {
+      toast(`Save failed: ${error.message}`, true);
+      titleInput.value = state.item?.title ?? titleInput.value;
+      lastSavedTitle = state.item?.title ?? "";
+      setTitleStatus("Not saved");
+    } finally {
+      titleSaving = false;
+    }
+    if (titleQueued) {
+      titleQueued = false;
+      saveTitleNow();
+    }
+  }
+
+  function scheduleTitleSave() {
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(() => saveTitleNow(), TITLE_DEBOUNCE_MS);
+  }
+
+  titleInput.addEventListener("input", () => {
+    setTitleStatus(titleInput.value.trim().length === 0 ? "Title cannot be empty" : "Edited");
+    scheduleTitleSave();
+  });
+  titleInput.addEventListener("blur", () => {
+    clearTimeout(titleTimer);
+    saveTitleNow();
+  });
+  titleInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      clearTimeout(titleTimer);
+      saveTitleNow();
+    }
+  });
+
+  // --- Description: Preview / Edit tabs with autosave ------------------------
+
+  const bodyNode = el("div", { class: "detail-body-text markdown-pane" });
+  const bodyInput = el("textarea", {
+    rows: "10",
+    class: "body-editor",
+    placeholder: "Describe the work (markdown-lite: *italic*, **bold**, `code`, links)",
+    "aria-label": "Edit description",
+  });
+  const bodyState = el("span", { class: "detail-save-state muted", "aria-live": "polite" });
+  // Preview is the default tab; a live-update remount restores the user's
+  // tab from the previous mount.
+  let bodyTab = sessionStorage.getItem(`wb-body-tab-${id}`) === "edit" ? "edit" : "preview";
+  let savedBody = "";
+  let bodySaving = false;
+  let bodyQueued = false;
+  let bodyTimer = null;
+
+  function setBodyStatus(text) {
+    bodyState.textContent = text;
+  }
+
+  async function saveBodyNow() {
+    if (bodySaving) {
+      bodyQueued = true;
+      return;
+    }
+    const value = bodyInput.value;
+    if (value === savedBody) {
+      setBodyStatus("");
+      return;
+    }
+    bodySaving = true;
+    setBodyStatus("Saving…");
+    try {
+      await api.updateItem(id, { body: value });
+      savedBody = value;
+      if (state.item !== null) state.item.body = value;
+      setBodyStatus("Saved ✓");
+    } catch (error) {
+      toast(`Save failed: ${error.message}`, true);
+      savedBody = state.item?.body ?? "";
+      bodyInput.value = savedBody;
+      setBodyStatus("Not saved");
+    } finally {
+      bodySaving = false;
+    }
+    if (bodyQueued) {
+      bodyQueued = false;
+      saveBodyNow();
+    }
+  }
+
+  function scheduleBodySave() {
+    clearTimeout(bodyTimer);
+    bodyTimer = setTimeout(() => saveBodyNow(), BODY_DEBOUNCE_MS);
+  }
+
+  bodyInput.addEventListener("input", () => {
+    setBodyStatus("Edited");
+    scheduleBodySave();
+  });
+
+  async function setBodyTab(tab) {
+    clearTimeout(bodyTimer);
+    // If the textarea is empty because it was never populated (fresh mount),
+    // fill it from server state BEFORE flushing, so switching tabs never
+    // saves a blanked-out description.
+    if (tab === "edit" && document.activeElement !== bodyInput) {
+      bodyInput.value = state.item?.body ?? savedBody;
+    }
+    sessionStorage.setItem(`wb-body-tab-${id}`, tab);
+    await saveBodyNow();
+    bodyTab = tab;
+    renderBody();
+    if (bodyTab === "edit") {
+      // Caret to the end after the pane becomes visible.
+      queueMicrotask(() => {
+        const end = bodyInput.value.length;
+        bodyInput.setSelectionRange(end, end);
+      });
+    }
+  }
+
+  const previewTab = el("button", { type: "button", class: "tab", role: "tab", id: "body-tab-preview", "aria-controls": "body-panel-preview" }, "Preview");
+  const editTab = el("button", { type: "button", class: "tab", role: "tab", id: "body-tab-edit", "aria-controls": "body-panel-edit" }, "Edit");
+  previewTab.addEventListener("click", () => setBodyTab("preview"));
+  editTab.addEventListener("click", () => setBodyTab("edit"));
+
+  function renderPreview() {
+    bodyNode.replaceChildren(renderMarkdown(state.item?.body ? state.item.body : "*(no description)*"));
+  }
+
+  const bodyEditorPane = el("div", { class: "body-editor-pane", id: "body-panel-edit", role: "tabpanel" }, bodyInput);
+  const bodyPreviewPane = el("div", { class: "detail-body", id: "body-panel-preview", role: "tabpanel" }, bodyNode);
+
+  function renderBody() {
+    const onEdit = bodyTab === "edit";
+    previewTab.setAttribute("aria-selected", onEdit ? "false" : "true");
+    previewTab.tabIndex = onEdit ? -1 : 0;
+    editTab.setAttribute("aria-selected", onEdit ? "true" : "false");
+    editTab.tabIndex = onEdit ? 0 : -1;
+    bodyPreviewPane.hidden = onEdit;
+    bodyEditorPane.hidden = !onEdit;
+    // Only sync the textarea from server state when the user is not actively
+    // typing in it — live updates must not clobber an open draft.
+    if (onEdit && document.activeElement !== bodyInput) {
+      bodyInput.value = state.item?.body ?? "";
+    }
+    if (!onEdit) renderPreview();
+  }
+
   function renderDetail() {
     const item = state.item;
-    titleArea.replaceChildren(titleNode, titleEditButton);
-    titleEditButton.disabled = false;
-    titleNode.textContent = item.title;
+    // Never clobber an input the user is composing in (e.g. live update).
+    if (document.activeElement !== titleInput) titleInput.value = item.title;
+    lastSavedTitle = item.title;
+    titleInput.disabled = false;
     metaNode.replaceChildren(
       el("span", { class: "chip" }, item.status),
       ` created ${formatTime(item.createdAt)}`,
@@ -124,121 +365,10 @@ async function mount(params, container) {
     statusSelect.value = item.status;
     prioritySelect.value = String(item.priority);
     assigneeSelect.value = item.assignee ? String(item.assignee.id) : "";
+    savedBody = item.body;
     renderBody();
     renderComments();
     renderHistory();
-  }
-
-  // --- Inline editors for title and description ------------------------------
-
-  function buildInlineEditor(options) {
-    const multiline = options.multiline === true;
-    const input = multiline
-      ? el("textarea", { rows: "6", class: "inline-editor-textarea", placeholder: options.placeholder, "aria-label": options.label })
-      : el("input", { type: "text", class: "inline-editor-input", placeholder: options.placeholder, "aria-label": options.label });
-    input.value = options.value ?? "";
-    const buttonRow = el("div", { class: "inline-editor-actions" });
-    const saveButton = el("button", { type: "button", class: "primary" }, "Save");
-    const cancelButton = el("button", { type: "button", class: "ghost" }, "Cancel");
-    buttonRow.append(el("span", { class: "muted" }, options.hint), cancelButton, saveButton);
-
-    function submit() {
-      // Real double-submit guard: block extra PATCHes while one is in flight;
-      // onSave calls the callback to re-enable after a rejected save.
-      saveButton.disabled = true;
-      options.onSave(input.value, () => {
-        saveButton.disabled = false;
-        input.focus();
-      });
-    }
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        options.onCancel();
-        return;
-      }
-      const isEnter = event.key === "Enter";
-      const wantsSave = multiline ? isEnter && (event.ctrlKey || event.metaKey) : isEnter && !event.shiftKey;
-      if (wantsSave && !saveButton.disabled) {
-        event.preventDefault();
-        submit();
-      }
-    });
-    saveButton.addEventListener("click", submit);
-    cancelButton.addEventListener("click", () => options.onCancel());
-    // Keyboard users land on the page top once the clicked button is removed;
-    // focus once the editor is actually attached (queueMicrotask runs after
-    // the caller's replaceChildren).
-    queueMicrotask(() => {
-      input.focus();
-      const end = input.value.length;
-      input.setSelectionRange(end, end);
-    });
-    return el("div", { class: "inline-editor" }, input, buttonRow);
-  }
-
-  function beginTitleEdit() {
-    if (state.item === null || titleEditButton.disabled) return;
-    const original = state.item.title;
-    titleArea.replaceChildren(
-      buildInlineEditor({
-        value: original,
-        placeholder: "Item title",
-        label: "Edit item title",
-        hint: "Enter to save · Esc to cancel",
-        onCancel: () => {
-          renderDetail();
-          titleEditButton.focus();
-        },
-        onSave: (value, resume) => {
-          const trimmed = value.trim();
-          if (trimmed.length === 0) {
-            toast("Title cannot be empty", true);
-            resume();
-            return;
-          }
-          if (trimmed === original) {
-            renderDetail();
-            titleEditButton.focus();
-            return;
-          }
-          patch({ title: trimmed }).then(() => titleEditButton.focus());
-          titleEditButton.disabled = true;
-        },
-      }),
-    );
-  }
-
-  function beginBodyEdit() {
-    if (state.item === null || bodyEditButton.disabled) return;
-    const original = state.item.body;
-    bodyNode.replaceChildren(
-      buildInlineEditor({
-        value: original,
-        placeholder: "Describe the work (markdown-lite: *italic*, **bold**, `code`, links)",
-        label: "Edit item description",
-        hint: "Ctrl+Enter to save · Esc to cancel",
-        multiline: true,
-        onCancel: () => {
-          renderDetail();
-          bodyEditButton.focus();
-        },
-        onSave: (value, resume) => {
-          if (value === original) {
-            renderDetail();
-            bodyEditButton.focus();
-            return;
-          }
-          patch({ body: value }).then(() => bodyEditButton.focus());
-          bodyEditButton.disabled = true;
-        },
-      }),
-    );
-  }
-
-  function renderBody() {
-    bodyEditButton.disabled = state.item === null;
-    bodyNode.replaceChildren(renderMarkdown(state.item?.body ? state.item.body : "(no description)"));
   }
 
   function renderComments() {
@@ -260,14 +390,67 @@ async function mount(params, container) {
     const entries = [...state.history].reverse();
     historyNode.replaceChildren(
       el("h3", {}, "History"),
-      ...entries.map((entry) => {
-        const change =
-          entry.oldValue === null && entry.newValue === null
-            ? entry.field
-            : `${entry.field}: ${entry.oldValue ?? "∅"} → ${entry.newValue ?? "∅"}`;
-        return el("div", { class: "history-entry" }, el("span", { class: "muted" }, formatTime(entry.createdAt)), " ", change, el("em", { class: "muted" }, ` — ${entry.actorName}`));
-      }),
+      ...entries.map((entry) => renderHistoryEntry(entry)),
     );
+  }
+
+  const expandedHistory = new Set();
+
+  function renderHistoryEntry(entry) {
+    const row = el("div", { class: "history-entry" });
+    row.append(el("span", { class: "muted" }, formatTime(entry.createdAt)), " ");
+    if (entry.field === "body" && typeof entry.oldValue === "string" || entry.field === "body" && typeof entry.newValue === "string") {
+      const ops = diffLines(entry.oldValue ?? "", entry.newValue ?? "");
+      const { added, removed } = diffCounts(ops);
+      const isOpen = expandedHistory.has(entry.id);
+      const summary = el(
+        "span",
+        { class: "diff-stat" },
+        el("span", { class: "diff-stat-add" }, `+${added}`),
+        " ",
+        el("span", { class: "diff-stat-del" }, `−${removed}`),
+      );
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
+      row.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      row.classList.add("diff-row");
+      row.append(
+        el("span", { class: "diff-label" }, `description changed`),
+        summary,
+        el("em", { class: "muted" }, ` — ${entry.actorName}`),
+        el("span", { class: "diff-caret", "aria-hidden": "true" }, isOpen ? "▾" : "▸"),
+      );
+      const box = el("pre", { class: "diff-box", "data-diff-id": String(entry.id) });
+      if (!isOpen) box.hidden = true;
+      const toggle = () => {
+        if (expandedHistory.has(entry.id)) expandedHistory.delete(entry.id);
+        else expandedHistory.add(entry.id);
+        const exp = expandedHistory.has(entry.id);
+        row.setAttribute("aria-expanded", exp ? "true" : "false");
+        row.querySelector(".diff-caret").textContent = exp ? "▾" : "▸";
+        box.hidden = !exp;
+      };
+      row.addEventListener("click", toggle);
+      row.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle();
+        }
+      });
+      for (const op of ops) {
+        const sign = op.type === "add" ? "+" : op.type === "del" ? "−" : " ";
+        box.append(el("span", { class: `diff-line ${op.type}` }, `${sign} ${op.line}`));
+      }
+      const group = el("div", { class: "history-diff-group" });
+      group.append(row, box);
+      return group;
+    }
+    const change =
+      entry.oldValue === null && entry.newValue === null
+        ? entry.field
+        : `${entry.field}: ${entry.oldValue ?? "∅"} → ${entry.newValue ?? "∅"}`;
+    row.append(change, el("em", { class: "muted" }, ` — ${entry.actorName}`));
+    return row;
   }
 
   // --- Composer with @mentions autocomplete ---------------------------------
@@ -363,7 +546,8 @@ async function mount(params, container) {
     }
   });
 
-  const submitButton = el("button", { class: "primary" }, "Comment");  async function submitComment() {
+  const submitButton = el("button", { class: "primary" }, "Comment");
+  async function submitComment() {
     const body = textarea.value.trim();
     if (!body) return;
     submitButton.disabled = true;
@@ -382,21 +566,21 @@ async function mount(params, container) {
   }
   submitButton.addEventListener("click", submitComment);
 
-  const titleEditButton = el("button", { class: "ghost ghost--small", "aria-label": "Edit title" }, "Edit title");
-  titleEditButton.addEventListener("click", beginTitleEdit);
-  const bodyEditButton = el("button", { class: "ghost ghost--small", "aria-label": "Edit description" }, "Edit description");
-  bodyEditButton.addEventListener("click", beginBodyEdit);
-  const titleArea = el("div", { class: "detail-title-area" }, titleNode, titleEditButton);
+  const bodyTabbar = el("div", { class: "tabbar", role: "tablist", "aria-label": "Description view" }, previewTab, editTab, bodyState);
   const bodyCard = el(
     "div",
     { class: "card detail-body" },
-    el("div", { class: "detail-body-head" }, bodyEditButton),
-    bodyNode,
+    bodyTabbar,
+    bodyPreviewPane,
+    bodyEditorPane,
   );
+
+  const titleArea = el("div", { class: "detail-title-area" }, titleInput, titleState);
 
   const deleteButton = el("button", { class: "danger" }, "Delete item");
   deleteButton.addEventListener("click", async () => {
     if (!window.confirm(`Delete item #${id}? This cannot be undone.`)) return;
+    if (document.activeElement === titleInput && titleInput.value.trim() !== lastSavedTitle) await saveTitleNow();
     try {
       await api.deleteItem(id);
       toast("Item deleted");

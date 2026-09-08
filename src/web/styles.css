@@ -217,31 +217,83 @@ main.content { flex: 1; padding: 20px; max-width: 1200px; width: 100%; margin: 0
 .detail-head { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
 .detail-title { margin: 0; font-size: 20px; }
 .detail-meta { margin-top: -8px; }
-.detail-controls { display: flex; gap: 14px; flex-wrap: wrap; }
-.detail-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.detail-controls { display: flex; gap: 14px; flex-wrap: wrap; }.detail-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .detail-controls select { width: auto; min-width: 130px; }
 .detail-body { white-space: normal; }
 
-/* Inline editing of title and description */
-.detail-title-area { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.detail-title-area .detail-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-button.ghost { background: transparent; border-color: var(--border); color: var(--muted); }
-button.ghost:hover { border-color: var(--accent); color: var(--text); }
-button.ghost--small { font-size: 12px; padding: 2px 8px; border-radius: 999px; flex: 0 0 auto; }
-.inline-editor { display: flex; flex-direction: column; gap: 8px; }
-.inline-editor-input, .inline-editor-textarea {
+/* Autosaving title input, description tabs, and git-style history diffs */
+.detail-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 20px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 4px 8px;
+  margin: -4px -8px;
+}
+.detail-title-input:hover { border-color: var(--border); }
+.detail-title-input:focus-visible { border-color: var(--accent); }
+.detail-save-state { font-size: 12px; color: var(--muted); min-width: 64px; text-align: right; }
+.detail-title-area { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.detail-title-area .detail-title-input { flex: 1 1 auto; min-width: 0; }
+
+.tabbar { display: flex; align-items: center; gap: 4px; margin-bottom: 10px; }
+.tabbar .detail-save-state { margin-left: auto; }
+button.tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+button.tab[aria-selected="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+button.tab:focus-visible { outline: 2px solid var(--accent-soft); }
+.body-editor {
   width: 100%;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text);
-  padding: 8px 10px;
+  padding: 10px 12px;
+  resize: vertical;
+  min-height: 160px;
+  font: 14px/1.5 ui-monospace, "JetBrains Mono", monospace;
 }
-.inline-editor-input { font-size: 18px; font-weight: 600; }
-.inline-editor-textarea { resize: vertical; min-height: 120px; }
-.inline-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.inline-editor-actions .muted { margin-right: auto; font-size: 12px; }
-.detail-body-head { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+
+.history-entry.diff-row {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.history-entry.diff-row:hover { background: var(--panel-2); }
+.history-entry.diff-row:focus-visible { outline: 2px solid var(--accent-soft); }
+.diff-stat { margin-left: 8px; font: 12px ui-monospace, monospace; }
+.diff-stat-add { color: var(--ok); }
+.diff-stat-del { color: var(--danger); }
+.diff-caret { color: var(--muted); margin-left: 6px; }
+.diff-box {
+  margin: 6px 0 2px 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: 12px/1.5 ui-monospace, "JetBrains Mono", monospace;
+  overflow-x: auto;
+  white-space: pre;
+}
+.diff-line { display: block; }
+.diff-line.add { color: var(--ok); background: rgba(74, 222, 128, 0.08); }
+.diff-line.del { color: var(--danger); background: rgba(255, 107, 107, 0.08); }
+.diff-line.ctx { color: var(--muted); }
+
 .detail-body-text { min-height: 20px; overflow-wrap: anywhere; }
 
 .markdown p { margin: 0 0 8px; }
