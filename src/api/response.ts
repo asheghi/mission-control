@@ -43,12 +43,53 @@ export function jsonError(
 }
 
 export function mapError(error: unknown, requestId: string): Response {
+  return mapErrorWithReport(error, requestId, reportUnexpectedError);
+}
+
+/**
+ * Error mapping with the unexpected-failure report injected, so a caller that
+ * owns an observability sink can report through it instead of process-wide
+ * stderr. A WorkboardError is an expected, documented outcome: it is never
+ * reported anywhere.
+ */
+export function mapErrorWithReport(
+  error: unknown,
+  requestId: string,
+  report: (error: unknown, requestId: string) => void,
+): Response {
   if (error instanceof WorkboardError) {
     return jsonError(error.code, error.message, requestId, error.details);
   }
-  console.error(`[api] unhandled error (request ${requestId})`, error);
+  report(error, requestId);
   return jsonError("INTERNAL", "An internal error occurred.", requestId);
 }
+
+/**
+ * Default report for an unhandled failure. It records a class name plus a
+ * bounded single-line message rather than the raw error: a stack trace and an
+ * unbounded message can both carry request-derived material (body text, an
+ * item title) into the log, which the observability rules forbid. Callers that
+ * want stack diagnostics attach a debugger or a sink of their own.
+ */
+export function reportUnexpectedError(error: unknown, requestId: string): void {
+  const detail = error instanceof Error ? `${error.name}: ${boundedDiagnostic(error.message)}` : typeof error;
+  console.error(`[api] unhandled error (request ${boundedRequestId(requestId)}): ${detail}`);
+}
+
+const MAX_DIAGNOSTIC_LENGTH = 500;
+
+function boundedDiagnostic(message: string): string {
+  // Control characters (including CR/LF) would forge extra log lines.
+  const cleaned = message.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  return cleaned.length > MAX_DIAGNOSTIC_LENGTH ? `${cleaned.slice(0, MAX_DIAGNOSTIC_LENGTH)}...` : cleaned;
+}
+
+function boundedRequestId(requestId: string): string {
+  return requestId.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 128);
+}
+
+/** Neutral report: records nothing. Used when a sink takes over the failure record. */
+export function discardUnexpectedError(): void {}
 
 export function methodNotAllowed(allow: readonly string[], requestId: string): Response {
   const response = jsonError("METHOD_NOT_ALLOWED", "The HTTP method is not allowed for this path.", requestId);

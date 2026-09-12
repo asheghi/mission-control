@@ -11,6 +11,10 @@ import { registerParticipantRoutes } from "./participants";
 import { registerLabelRoutes } from "./labels";
 import { registerEventsRoute } from "./events";
 import { handleMcpRequest, MCP_ENDPOINT_PATH } from "./mcp-http";
+import { createLogger } from "../observability/logger";
+import type { Logger } from "../observability/logger";
+import { createRequestLogObserver } from "../observability/request-log";
+import type { DurationClock } from "../observability/logger";
 
 export const DEFAULT_MAX_BODY_BYTES = 262_144; // 256 KiB
 
@@ -29,11 +33,26 @@ export interface ApiHandlerDependencies {
   readonly heartbeatMs?: number;
   /** Embedded web shell, keyed by path (e.g. "/", "/assets/app.js"). */
   readonly staticAssets?: Record<string, StaticAsset>;
+  /**
+   * Request sink. Defaults to one bounded JSON line per HTTP request on stderr,
+   * so observability is on unless a caller injects its own sink (tests, an
+   * embedding process). Only the record is handed over — never a token, header,
+   * body, comment, item title, or URL with a query string.
+   */
+  readonly logger?: Logger;
+  /** Duration source for records; defaults to a monotonic clock. */
+  readonly durationClock?: DurationClock;
 }
 
 export function createApiHandler(deps: ApiHandlerDependencies): (request: Request) => Promise<Response> {
   const clock: Clock = deps.clock ?? systemClock;
-  const router = new HttpRouter(deps.authenticate, () => clock.now());
+  // The observer is the one place a transport record is emitted; both the REST
+  // router and the /mcp endpoint share it so every request is logged once.
+  const observer = createRequestLogObserver({
+    logger: deps.logger ?? createLogger(),
+    ...(deps.durationClock !== undefined ? { clock: deps.durationClock } : {}),
+  });
+  const router = new HttpRouter(deps.authenticate, () => clock.now(), observer);
   const maxBodyBytes = deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   router.add("GET", "/api/health", (ctx) => {
@@ -59,6 +78,7 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
           service: deps.service,
           authenticate: deps.authenticate,
           clock,
+          observer,
           ...(deps.maxBodyBytes !== undefined ? { maxBodyBytes: deps.maxBodyBytes } : {}),
         },
         request,

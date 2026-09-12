@@ -1,18 +1,15 @@
 // List view (Task 14): filterable, cursor-paginated table with bulk assign.
+// Filters are URL/hash-backed (`#/list?status=doing&q=parse`) so a filtered
+// view is shareable, survives reload, and local storage keeps the last set
+// when the URL carries no query.
 import * as api from "./api.js";
 import { el, toast, navigate } from "./app.js";
+import { createDebounced, createFilterStore, hasActiveFilters } from "./ui-state.js";
 import { registerView } from "./views.js";
 
 const STATUSES = ["todo", "doing", "blocked", "done"];
 const PAGE_SIZE = 25;
-
-function debounce(fn, ms) {
-  let timer;
-  return (...args) => {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn(...args), ms);
-  };
-}
+const SEARCH_DEBOUNCE_MS = 250;
 
 async function mount(params, container) {
   const state = {
@@ -23,6 +20,15 @@ async function mount(params, container) {
     selected: new Set(),
     filters: { status: "", assignee: "", label: "", q: "" },
   };
+
+  // Every async step checks this before touching the DOM or the URL: a mount
+  // whose view was replaced (route change, refresh, sign-out) must not rewrite
+  // another route's hash or fetch pages nobody will ever see.
+  let alive = true;
+
+  // Restore from the URL hash first, then local storage, then empty.
+  const filterStore = createFilterStore();
+  state.filters = filterStore.load();
 
   const tableBody = el("tbody");
   const selectionBar = el("div", { class: "selection-bar", hidden: "hidden" });
@@ -43,9 +49,53 @@ async function mount(params, container) {
     { "aria-label": "Filter by label" },
     el("option", { value: "" }, "Any label"),
   );
-  const searchInput = el("input", { type: "search", placeholder: "Search titles…", "aria-label": "Search titles" });
+  const searchInput = el("input", { type: "search", class: "search-field", placeholder: "Search titles…", "aria-label": "Search titles" });
   const loadMoreButton = el("button", { onclick: () => loadMore() }, "Load more");
   const pageInfo = el("span", { class: "muted" });
+  const clearFiltersButton = el("button", { type: "button", class: "clear-filters", onclick: () => resetFilters() }, "Clear filters");
+
+  // Reflect the restored filters in the controls before the first fetch.
+  statusSelect.value = state.filters.status;
+  assigneeSelect.value = state.filters.assignee;
+  searchInput.value = state.filters.q;
+
+  /**
+   * A `<select>` silently falls back to its first option when the requested
+   * value has no option yet, so the control and the filter state drift apart.
+   * After the option set changes, reapply the stored value and *validate* it:
+   * a value with no matching option (stale shared link, deleted label) is
+   * cleared in state and in the URL instead of leaving the list filtered by
+   * something the user cannot see or reset from the control.
+   */
+  function reapplySelectFilter(select, key, hasOption) {
+    const desired = state.filters[key];
+    if (desired !== "" && !hasOption(desired)) {
+      state.filters[key] = "";
+      filterStore.set(state.filters);
+      select.value = "";
+      syncClearButton();
+      return false;
+    }
+    select.value = desired;
+    return select.value === desired;
+  }
+
+  function reapplyAssigneeFilter() {
+    return reapplySelectFilter(
+      assigneeSelect,
+      "assignee",
+      // "unassigned" is a real filter value with its own static option.
+      (value) => value === "unassigned" || state.participants.some((participant) => String(participant.id) === value),
+    );
+  }
+
+  function reapplyLabelFilter() {
+    return reapplySelectFilter(labelSelect, "label", (value) => state.labels.some((label) => label.name === value));
+  }
+
+  function syncClearButton() {
+    clearFiltersButton.toggleAttribute("hidden", !hasActiveFilters(state.filters));
+  }
 
   function updateSelectionBar() {
     const count = state.selected.size;
@@ -104,6 +154,8 @@ async function mount(params, container) {
       "tr",
       {
         tabindex: "0",
+        role: "link",
+        "aria-label": `Open work item #${item.id}: ${item.title}`,
         "data-id": String(item.id),
         onclick: () => navigate(`#/item/${item.id}`),
         onkeydown: (event) => {
@@ -136,16 +188,20 @@ async function mount(params, container) {
     if (state.filters.label) params.label = state.filters.label;
     if (state.filters.q) params.q = state.filters.q;
     const result = await api.listItems(params);
+    if (!alive) return;
     state.items = reset ? result.data : [...state.items, ...result.data];
     state.nextCursor = result.meta.nextCursor;
   }
 
   async function refresh({ reset = true } = {}) {
+    if (!alive) return;
     try {
       await fetchPage({ reset });
+      if (!alive) return; // the view was replaced while the page was in flight
       if (reset) clearSelection();
       renderRows();
     } catch (error) {
+      if (!alive) return;
       toast(`Could not load items: ${error.message}`, true);
     }
   }
@@ -156,31 +212,65 @@ async function mount(params, container) {
 
   statusSelect.addEventListener("change", () => {
     state.filters.status = statusSelect.value;
+    filterStore.commit(state.filters);
+    syncClearButton();
     refresh();
   });
   assigneeSelect.addEventListener("change", () => {
     state.filters.assignee = assigneeSelect.value;
+    filterStore.commit(state.filters);
+    syncClearButton();
     refresh();
   });
   labelSelect.addEventListener("change", () => {
     state.filters.label = labelSelect.value;
+    filterStore.commit(state.filters);
+    syncClearButton();
     refresh();
   });
-  searchInput.addEventListener("input", debounce(() => {
-    state.filters.q = searchInput.value.trim();
-    refresh();
-  }, 250));
+
+  // Typing stays out of history (replaceState), so the router does not remount
+  // and steal focus on every keystroke. The debounce is cancellable, and it is
+  // cancelled on unmount (see the cleanup registration below): without that, a
+  // keystroke typed just before a route change would fire afterwards and rewrite
+  // the *new* route's hash.
+  const searchDebounce = createDebounced({
+    delayMs: SEARCH_DEBOUNCE_MS,
+    fn: () => {
+      if (!alive) return;
+      state.filters.q = searchInput.value.trim();
+      filterStore.set(state.filters);
+      syncClearButton();
+      refresh();
+    },
+  });
+  searchInput.addEventListener("input", () => {
+    searchDebounce.schedule();
+  });
+
+  function resetFilters() {
+    searchDebounce.cancel();
+    state.filters = filterStore.reset();
+    statusSelect.value = "";
+    assigneeSelect.value = "";
+    labelSelect.value = "";
+    searchInput.value = "";
+    syncClearButton();
+    refresh({ reset: true });
+  }
 
   const view = el(
     "div",
     { class: "list-view" },
+    el("div", { class: "page-header" }, el("div", {}, el("h1", {}, "All work"), el("p", {}, "Search, filter, and manage every item in one place."))),
     el(
       "div",
-      { class: "list-toolbar" },
+      { class: "list-toolbar", "aria-label": "Filter work items" },
       statusSelect,
       assigneeSelect,
       labelSelect,
       searchInput,
+      clearFiltersButton,
     ),
     selectionBar,
     el(
@@ -192,7 +282,7 @@ async function mount(params, container) {
         el(
           "tr",
           {},
-          el("th", { class: "cell-check" }, ""),
+          el("th", { class: "cell-check" }, el("span", { class: "sr-only" }, "Select")),
           el("th", {}, "ID"),
           el("th", {}, "Title"),
           el("th", {}, "Status"),
@@ -208,9 +298,20 @@ async function mount(params, container) {
 
   container.replaceChildren(view);
 
+  // Unmount hook: cancel pending search work and reject late writes, so a
+  // keystroke typed just before a route change can never fire afterwards and
+  // rewrite the *new* route's hash. The router calls this before it swaps the
+  // view out; it is idempotent and safe to call after the view is gone.
+  view.unmount = () => {
+    if (!alive) return;
+    alive = false;
+    searchDebounce.cancel();
+  };
+
   // Load reference data for filters, then the first page.
   try {
     const [participants, labels] = await Promise.all([api.listParticipants(), api.listLabels()]);
+    if (!alive) return;
     state.participants = participants.data;
     state.labels = labels.data;
     for (const participant of state.participants) {
@@ -219,10 +320,21 @@ async function mount(params, container) {
     for (const label of state.labels) {
       labelSelect.append(el("option", { value: label.name }, label.name));
     }
+    // A label restored from the URL may not exist any more; fall back to "any"
+    // rather than leaving the select stuck on a missing option.
+    reapplyLabelFilter();
+    // Assignee filter options load asynchronously: reapply the restored value
+    // once they exist, otherwise a deep link such as #/list?assignee=7 renders
+    // the "Any assignee" placeholder while the list is actually filtered.
+    reapplyAssigneeFilter();
   } catch (error) {
+    if (!alive) return;
     toast(`Could not load filters: ${error.message}`, true);
   }
+  syncClearButton();
   await refresh({ reset: true });
+  // Returning the node lets the router track and later unmount this view.
+  return view;
 }
 
 registerView("list", { title: "List", href: "#/list", mount });

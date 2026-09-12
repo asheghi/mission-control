@@ -9,8 +9,15 @@ import { ForbiddenError } from "../domain/errors";
 import type { WorkboardService } from "../app/workboard";
 import { bearerToken } from "../auth/middleware";
 import type { Authenticator } from "./router";
-import { jsonError, mapError, readBodyText } from "./response";
+import { discardUnexpectedError, jsonError, mapErrorWithReport, readBodyText } from "./response";
 import { buildMcpServer } from "../mcp/tools";
+import {
+  createRequestLogContext,
+  createRequestLogObserver,
+  finishRequest,
+  setRequestParticipant,
+} from "../observability/request-log";
+import type { RequestLogObserver } from "../observability/request-log";
 
 export const MCP_ENDPOINT_PATH = "/mcp";
 export const DEFAULT_MCP_MAX_BODY_BYTES = 1_000_000;
@@ -22,6 +29,12 @@ export interface McpHttpDependencies {
   readonly authenticate: Authenticator;
   readonly clock?: Clock;
   readonly maxBodyBytes?: number;
+  /**
+   * Optional per-request observer. When present the endpoint emits the single
+   * mcp-http record for each request; the MCP JSON-RPC body is forwarded to the
+   * SDK verbatim and never observed.
+   */
+  readonly observer?: RequestLogObserver;
 }
 
 /** Browsers and same-origin UIs on loopback are allowed; everything else with an Origin is refused. */
@@ -30,9 +43,19 @@ export function isAllowedOrigin(origin: string): boolean {
 }
 
 export async function handleMcpRequest(deps: McpHttpDependencies, request: Request): Promise<Response> {
-  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+  // One context and one timer per request, shared with the REST transport's
+  // record shape; only the transport label differs.
+  const observer = deps.observer ?? createRequestLogObserver();
+  const context = createRequestLogContext(request, observer.clock);
+  const requestId = context.requestId();
   const withRequestId = (response: Response): Response => {
     response.headers.set("X-Request-Id", requestId);
+    finishRequest(observer, context, {
+      transport: "mcp-http",
+      method: request.method,
+      pathname: MCP_ENDPOINT_PATH,
+      status: response.status,
+    });
     return response;
   };
 
@@ -41,7 +64,7 @@ export async function handleMcpRequest(deps: McpHttpDependencies, request: Reque
       // Stateless: no SSE listening (GET) and no session to terminate (DELETE).
       const response = jsonError("METHOD_NOT_ALLOWED", "The MCP endpoint accepts POST only.", requestId);
       response.headers.set("Allow", "POST");
-      return response;
+      return withRequestId(response);
     }
 
     const origin = request.headers.get("origin");
@@ -52,6 +75,7 @@ export async function handleMcpRequest(deps: McpHttpDependencies, request: Reque
     // Authenticate before consuming the body: an unauthenticated caller gets
     // 401 without the server ever buffering its payload.
     const actor = deps.authenticate(bearerToken(request), (deps.clock ?? systemClock).now());
+    setRequestParticipant(context, actor.participantId);
 
     // Stream the body under a hard byte cap (readBodyText aborts past the
     // limit), and count bytes — not UTF-16 code units — against maxBytes.
@@ -61,7 +85,7 @@ export async function handleMcpRequest(deps: McpHttpDependencies, request: Reque
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return jsonError("VALIDATION", "Malformed JSON body.", requestId);
+      return withRequestId(jsonError("VALIDATION", "Malformed JSON body.", requestId));
     }
 
     // Stateless 2025-era pattern (proven by the Task 1 spike): a fresh server
@@ -81,6 +105,10 @@ export async function handleMcpRequest(deps: McpHttpDependencies, request: Reque
     void mcpServer.close();
     return withRequestId(response);
   } catch (error) {
-    return withRequestId(mapError(error, requestId));
+    // An unexpected failure is reported through the observer's sink (one
+    // bounded record) rather than process-wide stderr with a stack.
+    return withRequestId(
+      mapErrorWithReport(error, requestId, discardUnexpectedError),
+    );
   }
 }

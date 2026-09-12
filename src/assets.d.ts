@@ -39,3 +39,8 @@ declare module "*web/detail.js" {
   const content: string;
   export default content;
 }
+
+declare module "*web/ui-state.js" {
+  const content: string;
+  export default content;
+}

@@ -93,10 +93,11 @@ async function probe(responsePromise: Promise<Response> | Response): Promise<{
 describe("REST API", () => {
   test("health endpoint needs no auth and echoes correlation id", async () => {
     await withApi(async ({ url }) => {
-      const result = await probe(fetch(`${url}/api/health`, { headers: { "X-Request-Id": "corr-1" } }));
+      const correlationId = "123e4567-e89b-42d3-a456-426614174000";
+      const result = await probe(fetch(`${url}/api/health`, { headers: { "X-Request-Id": correlationId } }));
       expect(result.status).toBe(200);
       expect(result.body.data.status).toBe("ok");
-      expect(result.requestId).toBe("corr-1");
+      expect(result.requestId).toBe(correlationId);
     });
   });
 
@@ -318,6 +319,109 @@ describe("REST API", () => {
       expect(page1.body.meta.nextCursor).not.toBeNull();
       const page2 = await probe(fetch(`${url}/api/items?limit=2&cursor=${encodeURIComponent(page1.body.meta.nextCursor)}`, { headers: auth(aliceToken) }));
       expect([...page1.body.data, ...page2.body.data]).toHaveLength(3);
+    });
+  });
+
+  test("web board and label editor payloads: commentCount, agent kind, label patch", async () => {
+    await withApi(async ({ url, aliceToken, agent }) => {
+      const headers = { ...auth(aliceToken), "Content-Type": "application/json" };
+      await probe(fetch(`${url}/api/labels`, { method: "POST", headers, body: JSON.stringify({ name: "bug", color: "#FF0000" }) }));
+      await probe(fetch(`${url}/api/labels`, { method: "POST", headers, body: JSON.stringify({ name: "urgent", color: "#FF8800" }) }));
+
+      const item = await probe(
+        fetch(`${url}/api/items`, { method: "POST", headers, body: JSON.stringify({ title: "labelled work", labels: ["bug"] }) }),
+      );
+      const id = item.body.data.item.id;
+
+      // Board cards read commentCount (and assignee.kind for the agent marker)
+      // straight off the payload — no extra request per card.
+      expect(item.body.data.item.commentCount).toBe(0);
+      expect(item.body.data.item.assignee).toBeNull();
+
+      const patchAssignee = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ assigneeId: agent.participantId }) }),
+      );
+      expect(patchAssignee.status).toBe(200);
+      expect(patchAssignee.body.data.item.assignee).toMatchObject({ name: "agent-bot", kind: "agent" });
+
+      const listed = await probe(fetch(`${url}/api/items?limit=100`, { headers: auth(aliceToken) }));
+      const card = listed.body.data.find((row: { id: number }) => row.id === id);
+      expect(card.commentCount).toBe(0);
+      expect(card.assignee.kind).toBe("agent");
+      expect(card.labels.map((label: { name: string }) => label.name)).toEqual(["bug"]);
+
+      // Comment count is server data on the card, not a client-side guess.
+      await probe(fetch(`${url}/api/items/${id}/comments`, { method: "POST", headers, body: JSON.stringify({ body: "first" }) }));
+      await probe(fetch(`${url}/api/items/${id}/comments`, { method: "POST", headers, body: JSON.stringify({ body: "second" }) }));
+      const afterComments = await probe(fetch(`${url}/api/items/${id}`, { headers: auth(aliceToken) }));
+      expect(afterComments.body.data.item.commentCount).toBe(2);
+
+      // The label editor attaches an EXISTING label by sending the whole
+      // replacement set; an unknown name is a 404, so the editor must create
+      // the label first (POST /api/labels) exactly as it does for a typed name.
+      const attachUnknown = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: ["bug", "brand-new"] }) }),
+      );
+      expect(attachUnknown.status).toBe(404);
+      expect(attachUnknown.body.error.code).toBe("NOT_FOUND");
+      expect(attachUnknown.body.data).toBeUndefined();
+
+      const created = await probe(
+        fetch(`${url}/api/labels`, { method: "POST", headers, body: JSON.stringify({ name: "brand-new", color: "#3B82F6" }) }),
+      );
+      expect(created.status).toBe(201);
+      const duplicate = await probe(
+        fetch(`${url}/api/labels`, { method: "POST", headers, body: JSON.stringify({ name: "brand-new", color: "#10B981" }) }),
+      );
+      expect(duplicate.status).toBe(409); // the editor treats 409 as "attach it"
+
+      const attachedNew = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: ["bug", "brand-new"] }) }),
+      );
+      expect(attachedNew.body.data.item.labels.map((label: { name: string }) => label.name).sort()).toEqual(["brand-new", "bug"]);
+      // Back to one label so the removal assertions below stay meaningful.
+      await probe(fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: ["bug"] }) }));
+
+      // The label editor sends the whole replacement set by name.
+      const added = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: ["bug", "urgent"] }) }),
+      );
+      expect(added.status).toBe(200);
+      expect(added.body.data.item.labels.map((label: { name: string }) => label.name).sort()).toEqual(["bug", "urgent"]);
+      expect(added.body.data.changedFields).toContain("labels");
+      expect(added.body.data.history.map((entry: { field: string }) => entry.field)).toContain("label.added");
+
+      const removed = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: ["urgent"] }) }),
+      );
+      expect(removed.body.data.item.labels.map((label: { name: string }) => label.name)).toEqual(["urgent"]);
+      expect(removed.body.data.history.map((entry: { field: string }) => entry.field)).toContain("label.removed");
+
+      const cleared = await probe(fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: [] }) }));
+      expect(cleared.body.data.item.labels).toEqual([]);
+
+      // Re-attach through the same editor path before exercising the filter.
+      const reattached = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: ["urgent"] }) }),
+      );
+      expect(reattached.body.data.item.labels.map((label: { name: string }) => label.name)).toEqual(["urgent"]);
+
+      // The label filter the URL hash round-trips must select by label name.
+      const byLabel = await probe(fetch(`${url}/api/items?label=urgent&limit=100`, { headers: auth(aliceToken) }));
+      expect(byLabel.body.data.map((row: { title: string }) => row.title)).toEqual(["labelled work"]);
+
+      // A restored hash may name a label that no longer exists. Existing REST
+      // semantics apply: an unknown label is a 404 (unlike an unknown
+      // assignee, which is an empty 200). The list view therefore drops a
+      // restored label it cannot resolve instead of dead-ending on an error.
+      const unknownLabel = await probe(fetch(`${url}/api/items?label=deleted-label`, { headers: auth(aliceToken) }));
+      expect(unknownLabel.status).toBe(404);
+      expect(unknownLabel.body.error.code).toBe("NOT_FOUND");
+
+      const invalidLabel = await probe(
+        fetch(`${url}/api/items/${id}`, { method: "PATCH", headers, body: JSON.stringify({ labels: [""] }) }),
+      );
+      expect(invalidLabel.status).toBe(400);
     });
   });
 

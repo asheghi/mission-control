@@ -73,6 +73,33 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(shell.status).toBe(200);
       expect(await shell.text()).toContain("/assets/app.js");
 
+      // Every web asset is compiled into the binary; a missing one breaks the
+      // UI at runtime with no build error, so each is fetched and checked.
+      const assets = await Promise.all(
+        ["/assets/app.js", "/assets/api.js", "/assets/ui-state.js", "/assets/views.js", "/assets/board.js", "/assets/list.js", "/assets/detail.js", "/assets/styles.css"].map(
+          async (path) => ({ path, response: await fetch(`${baseUrl}${path}`) }),
+        ),
+      );
+      for (const { path, response } of assets) {
+        expect(response.status, path).toBe(200);
+        expect((await response.text()).length, path).toBeGreaterThan(0);
+      }
+
+      const uiState = await fetch(`${baseUrl}/assets/ui-state.js`);
+      expect(uiState.headers.get("content-type")).toContain("text/javascript");
+      const uiStateSource = await uiState.text();
+      // Regression guards for the shipped browser helpers: the restartable
+      // live controller makes sign-in reconnect work, and the identity guard
+      // keeps a superseded stream from disturbing a newer one.
+      expect(uiStateSource).toContain("createLiveRefreshController");
+      expect(uiStateSource).toContain("sessionId");
+      expect(uiStateSource).toContain("navigationState");
+      expect(uiStateSource).toContain("createDebounced");
+
+      const styles = await fetch(`${baseUrl}/assets/styles.css`);
+      expect(styles.headers.get("content-type")).toContain("text/css");
+      expect(await styles.text()).toContain(".live-indicator");
+
       const created = await fetch(`${baseUrl}/api/items`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

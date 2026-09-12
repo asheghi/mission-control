@@ -76,41 +76,70 @@ export const createLabel = (input) => api("/api/labels", { method: "POST", body:
 
 // Server-Sent Events via fetch-stream (EventSource cannot send the bearer
 // header). Returns a controller-shaped object with .close().
+//
+// onClose fires exactly once whenever the stream stops, including when close()
+// aborts it: without that, an aborted read rejects through the `aborted` guard
+// below and the caller would never learn that its stream ended.
 export function subscribeEvents(handlers, signal) {
   const controller = new AbortController();
-  signal?.addEventListener("abort", () => controller.abort());
+  // An external signal that was ALREADY aborted never fires "abort" again, so
+  // subscribing to it alone would start a stream the caller has already
+  // cancelled. Check the initial state, then follow later aborts.
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", () => controller.abort());
+  /** Exactly one terminal callback per subscription, whatever the exit path. */
+  let finished = false;
+  const finish = (error) => {
+    if (finished) return;
+    finished = true;
+    // A deliberate close() still reports a normal end of stream; only an
+    // unexpected failure is an error.
+    if (error === undefined || controller.signal.aborted) handlers.onClose?.();
+    else handlers.onError?.(error);
+  };
   (async () => {
-    const response = await fetch("/api/events", {
-      headers: { Authorization: `Bearer ${getToken()}`, Accept: "text/event-stream" },
-      signal: controller.signal,
-    });
-    if (!response.ok || !response.body) throw new ApiError("HTTP_ERROR", "event stream failed", response.status);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let pending = reader.read();
-    pending.catch(() => {});
-    while (true) {
-      const result = await pending;
-      if (result.done) break;
-      pending = reader.read();
+    try {
+      // Aborted before we even started: report the close without a request.
+      if (controller.signal.aborted) {
+        finish();
+        return;
+      }
+      const response = await fetch("/api/events", {
+        headers: { Authorization: `Bearer ${getToken()}`, Accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) {
+        finish();
+        return;
+      }
+      if (!response.ok || !response.body) throw new ApiError("HTTP_ERROR", "event stream failed", response.status);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let pending = reader.read();
       pending.catch(() => {});
-      buffer += decoder.decode(result.value ?? new Uint8Array(), { stream: true });
-      let index;
-      while ((index = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, index);
-        buffer = buffer.slice(index + 2);
-        const event = parseSseFrame(frame);
-        if (event) {
-          if (event.event.startsWith(":") || event.data === "") handlers.onComment?.(event.raw);
-          else handlers.onEvent?.(event);
+      while (true) {
+        const result = await pending;
+        if (result.done) break;
+        pending = reader.read();
+        pending.catch(() => {});
+        buffer += decoder.decode(result.value ?? new Uint8Array(), { stream: true });
+        let index;
+        while ((index = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, index);
+          buffer = buffer.slice(index + 2);
+          const event = parseSseFrame(frame);
+          if (event) {
+            if (event.event.startsWith(":") || event.data === "") handlers.onComment?.(event.raw);
+            else handlers.onEvent?.(event);
+          }
         }
       }
+      finish();
+    } catch (error) {
+      finish(error);
     }
-    handlers.onClose?.();
-  })().catch((error) => {
-    if (!controller.signal.aborted) handlers.onError?.(error);
-  });
+  })();
   return { close: () => controller.abort() };
 }
 

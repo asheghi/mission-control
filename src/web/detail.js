@@ -7,6 +7,7 @@
 // expands on click.
 import * as api from "./api.js";
 import { el, toast, navigate, errorBanner } from "./app.js";
+import { createSerialQueue, resolveAssignableParticipant, tabIndexForKey } from "./ui-state.js";
 import { registerView } from "./views.js";
 
 const STATUSES = ["todo", "doing", "blocked", "done"];
@@ -131,7 +132,12 @@ async function mount(params, container) {
   }
 
   const state = { item: null, comments: [], history: [], participants: [] };
+  // Participants and labels load before the controls are built, but each load
+  // can legitimately come back empty (offline, revoked token): the assignee
+  // control is then validated and reapplied rather than left showing a value
+  // the API never agreed to.
   state.participants = (await api.listParticipants().catch(() => ({ data: [] }))).data;
+  const allLabels = (await api.listLabels().catch(() => ({ data: [] }))).data;
 
   const metaNode = el("div", { class: "detail-meta muted" });
   const commentsNode = el("div", { class: "detail-comments" });
@@ -139,20 +145,44 @@ async function mount(params, container) {
 
   const statusSelect = el(
     "select",
-    { "aria-label": "Change status" },
+    { class: "detail-status-select", "aria-label": "Change status" },
     STATUSES.map((status) => el("option", { value: status }, status)),
   );
   const prioritySelect = el(
     "select",
-    { "aria-label": "Change priority" },
+    { class: "detail-priority-select", "aria-label": "Change priority" },
     [0, 1, 2, 3].map((priority) => el("option", { value: String(priority) }, `P${priority}`)),
   );
   const assigneeSelect = el(
     "select",
-    { "aria-label": "Change assignee" },
+    { class: "detail-assignee-select", "aria-label": "Change assignee" },
     el("option", { value: "" }, "Unassigned"),
     state.participants.map((participant) => el("option", { value: String(participant.id) }, participant.name)),
   );
+
+  /**
+   * Point the assignee control at `item`'s assignee, but only if that
+   * participant actually has an option. A `<select>` with a value it cannot
+   * represent silently shows its first option ("Unassigned"), which would make
+   * the control lie about an item that *is* assigned — so a missing option
+   * falls back to "Unassigned" explicitly instead of by accident.
+   */
+  function applyAssigneeSelection(item) {
+    const desired = resolveAssignableParticipant(item?.assignee, state.participants);
+    assigneeSelect.value = desired;
+    return item?.assignee === null || item?.assignee === undefined || desired !== "";
+  }
+
+  /** Rebuild the assignee options from the current roster. */
+  function renderAssigneeOptions() {
+    assigneeSelect.replaceChildren(
+      el("option", { value: "" }, "Unassigned"),
+      state.participants.map((participant) => el("option", { value: String(participant.id) }, participant.name)),
+    );
+    // Options changed: reapply and validate the selection afterwards, so a
+    // late-loading roster cannot leave the control on the wrong option.
+    if (state.item !== null) applyAssigneeSelection(state.item);
+  }
 
   async function patch(input) {
     try {
@@ -168,6 +198,154 @@ async function mount(params, container) {
   statusSelect.addEventListener("change", () => patch({ status: statusSelect.value }));
   prioritySelect.addEventListener("change", () => patch({ priority: Number(prioritySelect.value) }));
   assigneeSelect.addEventListener("change", () => patch({ assigneeId: assigneeSelect.value === "" ? null : Number(assigneeSelect.value) }));
+
+  // --- Labels: attach/detach through the existing REST label semantics -------
+  // PATCH /api/items/:id replaces the whole label set and resolves names that
+  // ALREADY exist (an unknown name is a 404). Creating a label is therefore a
+  // separate documented step, POST /api/labels, taken only when the typed name
+  // is unknown — an existing label is never re-created.
+
+  const labelsCard = el("div", { class: "card detail-labels" });
+  const labelInput = el("input", {
+    type: "text",
+    class: "label-input",
+    list: `wb-labels-${id}`,
+    placeholder: "Add label…",
+    "aria-label": "Add label",
+    autocomplete: "off",
+  });
+  const labelDatalist = el("datalist", { id: `wb-labels-${id}` });
+  const knownLabels = [...allLabels];
+  // Palette for labels created from the detail view; the API requires one.
+  const NEW_LABEL_COLORS = ["#3B82F6", "#EF4444", "#10B981", "#F59E0B", "#8B5CF6", "#EC4899"];
+
+  function itemLabelNames() {
+    return (state.item?.labels ?? []).map((label) => label.name);
+  }
+
+  function rememberLabel(name) {
+    if (!knownLabels.some((label) => label.name === name)) knownLabels.push({ name });
+  }
+
+  // Every label mutation PATCHes the whole set, so they are serialized and the
+  // controls are disabled while one is in flight (see createSerialQueue).
+  async function performApplyLabels({ names, message }) {
+    const next = [...new Set(names.map((name) => name.trim()).filter((name) => name !== ""))];
+    await api.updateItem(id, { labels: next });
+    await reload();
+    toast(message);
+  }
+
+  // Failures are reported by the queue's onError, so one rejected PATCH both
+  // surfaces to the user and leaves the queue usable for the next edit.
+  const labelQueue = createSerialQueue(performApplyLabels, {
+    onError: (error) => {
+      toast(`Label change failed: ${error.message}`, true);
+      void reload();
+    },
+  });
+
+  /**
+   * Request the label set be replaced with `names`. Rapid clicks collapse into
+   * one trailing PATCH of the latest requested set, so a slow earlier request
+   * can never come back and resurrect labels the user just removed.
+   */
+  function applyLabels(names, message) {
+    const desired = [...new Set(names.map((name) => name.trim()).filter((name) => name !== ""))];
+    setLabelControlsBusy(true);
+    return labelQueue.schedule({ names: desired, message }).finally(() => {
+      setLabelControlsBusy(labelQueue.isBusy());
+    });
+  }
+
+  /** Disable label controls while a whole-set PATCH is outstanding. */
+  function setLabelControlsBusy(busy) {
+    labelInput.disabled = busy;
+    labelInput.setAttribute("aria-busy", busy ? "true" : "false");
+    for (const control of labelsCard.querySelectorAll("button")) control.disabled = busy;
+  }
+
+  /** Attach a label typed by hand, creating it first if it does not exist yet. */
+  async function addTypedLabel(name) {
+    const names = itemLabelNames();
+    if (names.includes(name)) {
+      toast(`Already labelled ${name}`);
+      return;
+    }
+    if (!knownLabels.some((label) => label.name === name)) {
+      const color = NEW_LABEL_COLORS[knownLabels.length % NEW_LABEL_COLORS.length];
+      try {
+        await api.createLabel({ name, color });
+        rememberLabel(name);
+      } catch (error) {
+        // 409 means it already exists (e.g. created in another tab): attach it.
+        if (!(error instanceof api.ApiError) || error.status !== 409) {
+          toast(`Could not create label: ${error.message}`, true);
+          return;
+        }
+        rememberLabel(name);
+      }
+    }
+    applyLabels([...itemLabelNames(), name], `Added ${name}`);
+  }
+
+  function renderLabels() {
+    const names = itemLabelNames();
+    const chips = names.map((name) =>
+      el(
+        "span",
+        { class: "chip label-chip label-filter" },
+        name,
+        el(
+          "button",
+          {
+            type: "button",
+            class: "chip-remove",
+            "aria-label": `Remove label ${name}`,
+            onclick: (event) => {
+              event.stopPropagation();
+              // Derive the target set at click time from current state: the
+              // render-time `names` closure can be stale after a live update.
+              applyLabels(itemLabelNames().filter((candidate) => candidate !== name), `Removed ${name}`);
+            },
+          },
+          "×",
+        ),
+      ),
+    );
+    const suggestions = knownLabels
+      .filter((label) => !names.includes(label.name))
+      .map((label) =>
+        el(
+          "button",
+          {
+            type: "button",
+            class: "label-suggestion",
+            onclick: () => applyLabels([...itemLabelNames(), label.name], `Added ${label.name}`),
+          },
+          `+ ${label.name}`,
+        ),
+      );
+    const empty = names.length === 0 ? el("span", { class: "muted" }, "No labels") : null;
+    labelsCard.replaceChildren(
+      el("div", { class: "labels-head" }, el("span", { class: "labels-title" }, "Labels"), chips, empty),
+      suggestions.length > 0 ? el("div", { class: "labels-suggestions" }, suggestions) : null,
+      el("div", { class: "labels-add" }, labelInput, labelDatalist),
+    );
+    labelDatalist.replaceChildren(...knownLabels.map((label) => el("option", { value: label.name })));
+    // Re-created buttons must inherit the disabled state of an in-flight PATCH.
+    setLabelControlsBusy(labelQueue.isBusy());
+  }
+
+  labelInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (labelQueue.isBusy()) return; // a whole-set PATCH is still settling
+    const value = labelInput.value.trim();
+    if (value === "") return;
+    labelInput.value = "";
+    addTypedLabel(value);
+  });
 
   // --- Title: always-editable input with autosave ----------------------------
 
@@ -256,6 +434,10 @@ async function mount(params, container) {
   let bodySaving = false;
   let bodyQueued = false;
   let bodyTimer = null;
+  // True once the textarea has been filled from server state. Distinguishes
+  // "never populated" (safe to fill) from "populated, possibly with an unsaved
+  // draft" (never overwrite while the user is working).
+  let bodyInputPopulated = false;
 
   function setBodyStatus(text) {
     bodyState.textContent = text;
@@ -302,38 +484,79 @@ async function mount(params, container) {
     scheduleBodySave();
   });
 
-  async function setBodyTab(tab) {
+  /**
+   * Switch the active tab. Selection, focus and the panel swap happen
+   * synchronously — they are local UI state and must never wait on a network
+   * round trip — while the description flush is kicked off without awaiting it,
+   * so a slow save cannot leave the keyboard stuck on the old tab.
+   */
+  function setBodyTab(tab) {
     clearTimeout(bodyTimer);
-    // If the textarea is empty because it was never populated (fresh mount),
-    // fill it from server state BEFORE flushing, so switching tabs never
-    // saves a blanked-out description.
-    if (tab === "edit" && document.activeElement !== bodyInput) {
+    // The textarea is only authoritative once it has been populated. On a fresh
+    // mount it is empty and unpopulated, so fill it from server state BEFORE
+    // flushing — otherwise switching tabs would save a blanked-out description.
+    // Once populated, an unsaved draft must survive the switch untouched.
+    if (tab === "edit" && !bodyInputPopulated) {
       bodyInput.value = state.item?.body ?? savedBody;
+      bodyInputPopulated = true;
     }
     sessionStorage.setItem(`wb-body-tab-${id}`, tab);
-    await saveBodyNow();
     bodyTab = tab;
-    renderBody();
-    if (bodyTab === "edit") {
-      // Caret to the end after the pane becomes visible.
-      queueMicrotask(() => {
-        const end = bodyInput.value.length;
-        bodyInput.setSelectionRange(end, end);
-      });
-    }
+    renderBody(); // immediate: aria-selected, roving tabindex, visible pane
+    // Fire-and-forget: the autosave serializes itself, so a slow save cannot
+    // delay the tab selection and a failure surfaces in the status text only.
+    void saveBodyNow();
   }
 
-  const previewTab = el("button", { type: "button", class: "tab", role: "tab", id: "body-tab-preview", "aria-controls": "body-panel-preview" }, "Preview");
-  const editTab = el("button", { type: "button", class: "tab", role: "tab", id: "body-tab-edit", "aria-controls": "body-panel-edit" }, "Edit");
+  const previewTab = el(
+    "button",
+    { type: "button", class: "tab", role: "tab", id: "body-tab-preview", "aria-controls": "body-panel-preview" },
+    "Preview",
+  );
+  const editTab = el(
+    "button",
+    { type: "button", class: "tab", role: "tab", id: "body-tab-edit", "aria-controls": "body-panel-edit" },
+    "Edit",
+  );
   previewTab.addEventListener("click", () => setBodyTab("preview"));
   editTab.addEventListener("click", () => setBodyTab("edit"));
+
+  // WAI-ARIA tabs pattern: automatic activation on arrows/Home/End with
+  // roving tabindex (exactly one tab is in the tab order, and it follows the
+  // selection because setBodyTab derives tabIndex from the active tab).
+  const bodyTabs = [previewTab, editTab];
+  const BODY_TAB_NAMES = ["preview", "edit"];
+  function moveBodyTabFocus(event) {
+    const key = event.key;
+    if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+    const current = Math.max(0, BODY_TAB_NAMES.indexOf(bodyTab));
+    const next = tabIndexForKey(key, current, bodyTabs.length);
+    if (next === null) return;
+    event.preventDefault();
+    // Synchronous selection, then move focus in the same turn: awaiting the
+    // autosave here used to delay (and on a failed save, lose) focus movement.
+    setBodyTab(BODY_TAB_NAMES[next]);
+    bodyTabs[next].focus();
+  }
+  previewTab.addEventListener("keydown", moveBodyTabFocus);
+  editTab.addEventListener("keydown", moveBodyTabFocus);
 
   function renderPreview() {
     bodyNode.replaceChildren(renderMarkdown(state.item?.body ? state.item.body : "*(no description)*"));
   }
 
-  const bodyEditorPane = el("div", { class: "body-editor-pane", id: "body-panel-edit", role: "tabpanel" }, bodyInput);
-  const bodyPreviewPane = el("div", { class: "detail-body", id: "body-panel-preview", role: "tabpanel" }, bodyNode);
+  const bodyEditorPane = el(
+    "div",
+    { class: "body-editor-pane", id: "body-panel-edit", role: "tabpanel", "aria-labelledby": "body-tab-edit", tabindex: "0" },
+    bodyInput,
+  );
+  const bodyPreviewPane = el("div", {
+    class: "detail-body",
+    id: "body-panel-preview",
+    role: "tabpanel",
+    "aria-labelledby": "body-tab-preview",
+    tabindex: "0",
+  }, bodyNode);
 
   function renderBody() {
     const onEdit = bodyTab === "edit";
@@ -343,10 +566,12 @@ async function mount(params, container) {
     editTab.tabIndex = onEdit ? 0 : -1;
     bodyPreviewPane.hidden = onEdit;
     bodyEditorPane.hidden = !onEdit;
-    // Only sync the textarea from server state when the user is not actively
-    // typing in it — live updates must not clobber an open draft.
-    if (onEdit && document.activeElement !== bodyInput) {
+    // Only sync the textarea from server state when it has not been populated
+    // for this mount yet: live updates and tab switches must not clobber an
+    // open draft, and a populated textarea is the user's working copy.
+    if (onEdit && !bodyInputPopulated) {
       bodyInput.value = state.item?.body ?? "";
+      bodyInputPopulated = true;
     }
     if (!onEdit) renderPreview();
   }
@@ -362,11 +587,14 @@ async function mount(params, container) {
       ` created ${formatTime(item.createdAt)}`,
       item.closedAt ? ` · closed ${formatTime(item.closedAt)}` : "",
     );
-    statusSelect.value = item.status;
-    prioritySelect.value = String(item.priority);
-    assigneeSelect.value = item.assignee ? String(item.assignee.id) : "";
+    // Same rule for the label editor: a live remount must not wipe the draft.
+    if (document.activeElement !== labelInput) labelInput.value = "";
+    if (!statusSelect.contains(document.activeElement)) statusSelect.value = item.status;
+    if (!prioritySelect.contains(document.activeElement)) prioritySelect.value = String(item.priority);
+    if (!assigneeSelect.contains(document.activeElement)) applyAssigneeSelection(item);
     savedBody = item.body;
     renderBody();
+    renderLabels();
     renderComments();
     renderHistory();
   }
@@ -596,6 +824,17 @@ async function mount(params, container) {
       state.item = detail.data.item;
       state.comments = detail.data.comments;
       state.history = detail.data.history;
+      // An assignee can reference a participant the original roster fetch did
+      // not return (a just-created agent, a failed first load). Refresh the
+      // roster *before* rendering so the control can actually represent the
+      // item's assignee instead of falling back to "Unassigned".
+      if (state.item?.assignee && !state.participants.some((p) => String(p.id) === String(state.item.assignee.id))) {
+        const participants = await api.listParticipants().catch(() => null);
+        if (participants !== null) {
+          state.participants = participants.data;
+          renderAssigneeOptions(); // rebuilds options, then reapplies the value
+        }
+      }
       renderDetail();
     } catch (error) {
       container.replaceChildren(errorBanner(error));
@@ -607,6 +846,7 @@ async function mount(params, container) {
     el(
       "div",
       { class: "detail" },
+      el("a", { class: "breadcrumb", href: "#/board" }, "← Back to board"),
       el("div", { class: "detail-head" }, titleArea, deleteButton),
       metaNode,
       el(
@@ -616,6 +856,7 @@ async function mount(params, container) {
         el("label", {}, "Priority", prioritySelect),
         el("label", {}, "Assignee", assigneeSelect),
       ),
+      labelsCard,
       bodyCard,
       el("div", { class: "composer card" }, textarea, mentionList, el("div", { class: "composer-actions" }, el("span", { class: "muted" }, "Ctrl+Enter to post"), submitButton)),
       commentsNode,

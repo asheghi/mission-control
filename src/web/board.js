@@ -2,6 +2,7 @@
 // moves, optimistic status updates with rollback, per-column quick add.
 import * as api from "./api.js";
 import { el, toast, errorBanner, navigate } from "./app.js";
+import { cardMeta } from "./ui-state.js";
 import { registerView } from "./views.js";
 
 const STATUSES = ["todo", "doing", "blocked", "done"];
@@ -22,19 +23,34 @@ function priorityClass(priority) {
 }
 
 function cardNode(item, options) {
+  const meta = cardMeta(item);
   const labels = (item.labels || []).map((label) => el("span", { class: "chip label-chip" }, label.name));
   const assignee = item.assignee
     ? el("span", { class: "avatar", title: item.assignee.name, style: `background:${item.assignee.kind === "agent" ? "#8B5CF6" : "#3B82F6"}` }, initials(item.assignee.name))
     : null;
+  // The agent badge is text, not colour alone, and names the assignee for
+  // assistive tech; the comment chip is data (commentCount), not an icon guess.
+  const agentBadge = meta.isAgent
+    ? el("span", { class: "chip agent-chip", title: meta.agentLabel }, "agent")
+    : null;
+  const commentChip = el(
+    "span",
+    {
+      class: `chip comment-chip${meta.commentCount === 0 ? " empty" : ""}`,
+      title: meta.commentLabel,
+    },
+    meta.commentText,
+  );
   const card = el(
     "article",
     {
       class: `board-card`,
       tabindex: "0",
+      role: "link",
       draggable: "true",
       "data-id": String(item.id),
       "data-status": item.status,
-      "aria-label": `#${item.id} ${item.title}, ${item.status}`,
+      "aria-label": `#${item.id} ${item.title}, ${item.status}${meta.isAgent ? `, ${meta.agentLabel}` : ""}, ${meta.commentLabel}`,
       ondragstart: (event) => {
         event.dataTransfer.setData("text/plain", String(item.id));
         event.dataTransfer.effectAllowed = "move";
@@ -43,7 +59,7 @@ function cardNode(item, options) {
       ondragend: () => card.classList.remove("dragging"),
       onclick: () => navigate(`#/item/${item.id}`),
       onkeydown: (event) => {
-        if (event.key === "Enter") {
+        if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           navigate(`#/item/${item.id}`);
           return;
@@ -64,7 +80,12 @@ function cardNode(item, options) {
       labels,
     ),
     el("div", { class: "board-card-title" }, item.title),
-    el("div", { class: "board-card-bottom" }, el("span", { class: "muted" }, `#${item.id}`), assignee),
+    el(
+      "div",
+      { class: "board-card-bottom" },
+      el("span", { class: "board-card-refs" }, el("span", { class: "muted" }, `#${item.id}`), commentChip),
+      el("span", { class: "board-card-people" }, agentBadge, assignee),
+    ),
   );
   return card;
 }
@@ -179,7 +200,15 @@ async function mount(params, container) {
     });
   }
 
-  container.replaceChildren(board);
+  container.replaceChildren(
+    el(
+      "div",
+      { class: "page-header" },
+      el("div", {}, el("h1", {}, "Board"), el("p", {}, "Track work as it moves from idea to completion.")),
+      el("div", { class: "keyboard-hint" }, "Tip: use ← and → to move a focused item"),
+    ),
+    board,
+  );
   try {
     await refresh();
   } catch (error) {
