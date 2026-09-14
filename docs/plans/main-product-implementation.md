@@ -1,5 +1,10 @@
 # Agent Workboard: Main Product Implementation Plan
 
+> **Frontend update:** The initial vanilla web UI is implemented. For the next
+> frontend architecture, build, design-system, migration, and completion
+> contract, `docs/plans/web-ui-modernization.md` supersedes the frontend-specific
+> guidance in this historical main-product plan.
+
 ## 0. Instructions for the implementing model
 
 This plan is intentionally explicit so a cheaper coding model can execute it one task at a time.
@@ -44,7 +49,7 @@ Initial statuses are `todo`, `doing`, `blocked`, and `done`. Participants are ei
 1. **One application layer:** REST, CLI, stdio MCP, and HTTP MCP call the same service methods.
 2. **Authenticated actor:** mutation methods receive an actor from trusted transport context. Request bodies and MCP arguments never choose the actor.
 3. **Transactional mutations:** primary write, mention extraction, and history insertion commit or roll back together.
-4. **Transport independence:** application modules do not import HTTP, MCP, React, or CLI libraries.
+4. **Transport independence:** application modules do not import HTTP, MCP, Preact, or CLI libraries.
 5. **Stable contracts:** transport schemas map explicitly to owned DTOs; never expose database rows directly.
 6. **Safe markdown:** raw HTML is disabled and links allow only `http`, `https`, `mailto`, and relative URLs.
 7. **Stateless MCP HTTP:** `/mcp` keeps no protocol session. Prefer modern MCP 2026-07-28 when the real DSH client supports it; otherwise use the official 2025-era stateless compatibility pattern without issuing `MCP-Session-Id`.
@@ -138,9 +143,11 @@ During Task 1, determine and pin exact compatible versions; never leave core dep
 - Database: `bun:sqlite` only.
 - MCP: official `@modelcontextprotocol/sdk`, exact tested version.
 - Validation: Zod version compatible with the selected MCP SDK.
-- UI: React, React DOM, React Router, TanStack Query, shadcn/ui primitives.
-- Drag and drop: `@dnd-kit`.
-- Markdown: `react-markdown` plus a constrained URL transform; raw HTML plugin must not be enabled.
+- UI modernization: Preact + TypeScript, bundled for browsers with Bun and served by the existing Workboard server.
+- Design system: Workboard-owned semantic CSS tokens and local components, using GitHub Primer Product as the reference.
+- Routing and state: begin with owned lightweight modules and Preact hooks; add no router, query library, or drag/drop dependency without a demonstrated requirement.
+- Markdown: use an owned or narrowly selected renderer with a constrained URL transform; raw HTML must not be enabled.
+- Frontend runtime dependencies: locally installed, exactly pinned, and embedded; no CDN and no separate development server.
 - E2E: Playwright.
 - Password/token hashing: use a Bun-supported cryptographic primitive; store a keyed digest or password hash, never the plaintext token.
 
@@ -513,7 +520,16 @@ Acceptance: subprocess tests for help, version, participant/token bootstrap, ite
 
 ### Task 12 — Static web shell and API client
 
-Set up React, routes, Query client, CSS tokens, shadcn/ui components, and typed API client.
+The initial dependency-free web shell is implemented. Its modernization is governed by `docs/plans/web-ui-modernization.md`.
+
+Target architecture:
+
+- Preact + TypeScript/TSX.
+- Bun browser-target build; no Vite or separate frontend development server.
+- Same Workboard HTTP server and public routes in development and production.
+- Workboard-owned semantic CSS tokens and small Primer-inspired component set.
+- Typed API client and one owned SSE lifecycle.
+- Locally bundled dependencies and assets; no runtime CDN.
 
 Routes:
 
@@ -524,7 +540,7 @@ Routes:
 
 Authentication for v1 may use a token stored in memory/session storage. Do not put tokens in URLs. Document the threat model and provide logout/clear behavior.
 
-Acceptance: production web bundle builds, server serves SPA fallback without shadowing `/api` or `/mcp`, API errors render in English, keyboard focus is visible.
+Acceptance: the Bun production web bundle builds before executable compilation; the same server serves development and production routes; SPA fallback does not shadow `/api`, `/mcp`, `/healthz`, or SSE; API errors render safely in English; keyboard focus is visible; and the executable works offline without external assets or `node_modules`.
 
 ### Task 13 — Board view
 
@@ -587,7 +603,7 @@ Acceptance: write data, backup, restore into a new directory, compare public dat
 
 ### Task 18 — Production build
 
-Bundle server, CLI, migrations, and hashed web assets into one Bun-compiled executable. Runtime must not depend on source files or `node_modules`.
+Run the Bun browser-target build first, then bundle the server, CLI, migrations, and generated web assets into one Bun-compiled executable. Runtime must not depend on source files, `node_modules`, an external asset directory, a CDN, or a separate frontend server. The browser asset pipeline must follow `docs/plans/web-ui-modernization.md`.
 
 Acceptance in a clean temporary directory:
 

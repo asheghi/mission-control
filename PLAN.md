@@ -3,8 +3,10 @@
 **Product:** A backlog where humans and AI agents are both participants — same
 items, same assignment, same @mentions. Humans use a web UI, agents use MCP.
 
-**Stack:** Bun 1.4.0, TypeScript strict, `bun:sqlite`, React + shadcn/ui,
-official MCP SDK. `bun build --compile` → one executable.
+**Stack:** Bun 1.4.0, strict TypeScript, `bun:sqlite`, official MCP SDK,
+and a Preact web UI bundled with Bun. The UI uses a small Workboard-owned,
+Primer-inspired, CSS-first design system. `bun build --compile` produces one
+offline, self-contained executable.
 
 ---
 
@@ -110,9 +112,19 @@ when stuck.
 Agents get a visible marker in the assignee dropdown and on cards, so you can
 see at a glance what is being worked by whom.
 
-Live updates over SSE. Markdown renders via `react-markdown` with raw HTML not
-enabled and a URL allowlist (`http`, `https`, `mailto`, relative) — comments are
-written by agents relaying text from anywhere.
+Live updates use SSE. The target component architecture is Preact + TypeScript,
+built with Bun's browser bundler and served by the existing Workboard server in
+both development and production. There is no Vite server, runtime CDN, or
+production dependency on `node_modules` or external web assets.
+
+The UI uses semantic CSS custom properties and a small Workboard-owned design
+system, with GitHub Primer Product as the visual and interaction reference.
+Design-system primitives remain separate from board/list/detail product
+components. Markdown keeps raw HTML disabled and allows only `http`, `https`,
+`mailto`, and relative URLs.
+
+The incremental migration and acceptance criteria are specified in
+`docs/plans/web-ui-modernization.md`.
 
 ---
 
@@ -125,13 +137,17 @@ participants. Tests against a disk-backed database.
 Claude Code session at the compiled binary and having it work an item end to
 end.
 
-**Phase 3 — Web UI.** Board, list, detail, mentions, SSE. Playwright against the
-compiled binary, including a markdown XSS corpus.
+**Phase 3 — Initial Web UI.** Board, list, detail, mentions, and SSE against the
+compiled binary, including a Markdown XSS corpus. The existing vanilla modules
+satisfy this initial product phase.
 
 **Phase 4 — Polish.** CLI, backup/restore, `workboard doctor`, structured logs.
 
-Phases 1–3 are the product. Ship them, use it on a real project, then decide
-what phase 5 is from what actually annoys you.
+**Phase 5 — Web UI modernization.** Incrementally migrate the working UI to
+Preact + TypeScript, bundled by Bun and embedded in the same executable. Add the
+Workboard-owned Primer-inspired design system without changing the server
+runtime topology or public route scheme. Follow
+`docs/plans/web-ui-modernization.md`; do not perform a flag-day rewrite.
 
 ---
 
