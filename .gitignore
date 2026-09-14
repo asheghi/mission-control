@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .tmp/
+.generated/
 wb_data/
 spike/
 workboard

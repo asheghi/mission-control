@@ -8,14 +8,16 @@
     "bun": "1.4.0"
   },
   "scripts": {
-    "dev": "bun --watch src/entry.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "build:web": "bun run scripts/build-web.ts",
+    "dev": "bun run build:web && bun --watch src/entry.ts",
+    "typecheck": "bun run build:web && tsc --noEmit",
+    "test": "bun run build:web && bun test",
     "test:e2e": "bun test test/e2e",
-    "build": "bun build ./src/entry.ts --compile --outfile dist/workboard"
+    "build": "bun run build:web && bun build ./src/entry.ts --compile --outfile dist/workboard"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
+    "preact": "10.27.2",
     "zod": "4.5.4"
   },
   "devDependencies": {

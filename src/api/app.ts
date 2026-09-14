@@ -84,7 +84,7 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
         request,
       );
     }
-    if (pathname.startsWith("/api/")) return router.handle(request);
+    if (pathname.startsWith("/api/") || pathname === "/healthz") return router.handle(request);
 
     const assets = deps.staticAssets;
     if (assets !== undefined) {

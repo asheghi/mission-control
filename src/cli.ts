@@ -15,33 +15,11 @@ import { initializeDatabase } from "./db/database";
 import { claimServePid, releaseServePid } from "./maintenance/serve-lock";
 import type { Database } from "bun:sqlite";
 import { createApiHandler } from "./api/app";
-import type { StaticAsset } from "./api/app";
 import { handleMcpRequest } from "./api/mcp-http";
 import { runStdioMcpServer } from "./mcp/stdio";
 import { APP_VERSION } from "./version";
 import { backupDatabase, defaultBackupPath, restoreDatabase, runDoctor as doctorChecks } from "./maintenance/backup";
-import indexHtml from "./web/index.html" with { type: "text" };
-import stylesCss from "./web/styles.css" with { type: "text" };
-import appJs from "./web/app.js" with { type: "text" };
-import apiJs from "./web/api.js" with { type: "text" };
-import viewsJs from "./web/views.js" with { type: "text" };
-import uiStateJs from "./web/ui-state.js" with { type: "text" };
-import boardJs from "./web/board.js" with { type: "text" };
-import listJs from "./web/list.js" with { type: "text" };
-import detailJs from "./web/detail.js" with { type: "text" };
-
-const STATIC_ASSETS: Record<string, StaticAsset> = {
-  "/": { body: indexHtml, contentType: "text/html; charset=utf-8" },
-  "/index.html": { body: indexHtml, contentType: "text/html; charset=utf-8" },
-  "/assets/styles.css": { body: stylesCss, contentType: "text/css; charset=utf-8" },
-  "/assets/app.js": { body: appJs, contentType: "text/javascript; charset=utf-8" },
-  "/assets/api.js": { body: apiJs, contentType: "text/javascript; charset=utf-8" },
-  "/assets/views.js": { body: viewsJs, contentType: "text/javascript; charset=utf-8" },
-  "/assets/ui-state.js": { body: uiStateJs, contentType: "text/javascript; charset=utf-8" },
-  "/assets/board.js": { body: boardJs, contentType: "text/javascript; charset=utf-8" },
-  "/assets/list.js": { body: listJs, contentType: "text/javascript; charset=utf-8" },
-  "/assets/detail.js": { body: detailJs, contentType: "text/javascript; charset=utf-8" },
-};
+import { STATIC_ASSETS } from "./web/static-assets";
 
 interface ParsedArgs {
   readonly flags: Map<string, string | boolean>;

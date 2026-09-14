@@ -1,6 +1,10 @@
 // Task 18/19 end-to-end: exercises the compiled single binary from a clean
 // directory — the runtime must not depend on source files or node_modules.
 // Skips automatically when dist/workboard has not been built (bun run build).
+//
+// Phase A adds the generated browser bundle to the same run: the executable
+// serves the fixed asset paths, proves the Preact marker is compiled in, and
+// still exposes the exact six-tool MCP contract.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -71,12 +75,15 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
 
       const shell = await fetch(`${baseUrl}/`);
       expect(shell.status).toBe(200);
-      expect(await shell.text()).toContain("/assets/app.js");
+      const shellHtml = await shell.text();
+      expect(shellHtml).toContain("/assets/app.js");
+      expect(shellHtml).toContain('id="preact-marker" hidden');
 
-      // Every web asset is compiled into the binary; a missing one breaks the
-      // UI at runtime with no build error, so each is fetched and checked.
+      // Phase A fixes the public asset surface at exactly these four paths;
+      // each is compiled into the binary, so a missing one breaks the UI at
+      // runtime with no build error.
       const assets = await Promise.all(
-        ["/assets/app.js", "/assets/api.js", "/assets/ui-state.js", "/assets/views.js", "/assets/board.js", "/assets/list.js", "/assets/detail.js", "/assets/styles.css"].map(
+        ["/", "/index.html", "/assets/app.js", "/assets/styles.css"].map(
           async (path) => ({ path, response: await fetch(`${baseUrl}${path}`) }),
         ),
       );
@@ -85,20 +92,28 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
         expect((await response.text()).length, path).toBeGreaterThan(0);
       }
 
-      const uiState = await fetch(`${baseUrl}/assets/ui-state.js`);
-      expect(uiState.headers.get("content-type")).toContain("text/javascript");
-      const uiStateSource = await uiState.text();
-      // Regression guards for the shipped browser helpers: the restartable
-      // live controller makes sign-in reconnect work, and the identity guard
-      // keeps a superseded stream from disturbing a newer one.
-      expect(uiStateSource).toContain("createLiveRefreshController");
-      expect(uiStateSource).toContain("sessionId");
-      expect(uiStateSource).toContain("navigationState");
-      expect(uiStateSource).toContain("createDebounced");
+      // The former per-module asset URLs are gone: they must not survive as
+      // ghost routes now that one bundle serves the whole UI.
+      for (const path of ["/assets/api.js", "/assets/ui-state.js", "/assets/views.js", "/assets/board.js"]) {
+        expect((await fetch(`${baseUrl}${path}`)).status, path).toBe(404);
+      }
+
+      const bundle = await fetch(`${baseUrl}/assets/app.js`);
+      expect(bundle.headers.get("content-type")).toContain("text/javascript");
+      const bundleSource = await bundle.text();
+      // Phase A marker rendered by src/web/main.tsx, compiled into the bundle.
+      expect(bundleSource).toContain("Preact browser build active");
+      expect(bundleSource).toContain("preact-marker");
+      expect(bundleSource).toContain("phase-a");
+      // Legacy application behavior still ships inside the same bundle.
+      expect(bundleSource).toContain("live-indicator");
+      expect(bundleSource).toContain("api/events");
 
       const styles = await fetch(`${baseUrl}/assets/styles.css`);
       expect(styles.headers.get("content-type")).toContain("text/css");
-      expect(await styles.text()).toContain(".live-indicator");
+      const stylesSource = await styles.text();
+      expect(stylesSource.length).toBeGreaterThan(0);
+      expect(stylesSource).toContain(".live-indicator");
 
       const created = await fetch(`${baseUrl}/api/items`, {
         method: "POST",
@@ -118,7 +133,17 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       });
       expect(tools.status).toBe(200);
       const toolsBody = (await tools.json()) as { result: { tools: { name: string }[] } };
-      expect(toolsBody.result.tools.map((tool) => tool.name)).toContain("list_work");
+      // Exact contract, not a subset: the binary advertises the six tools and
+      // nothing else, so a missing or accidentally extra tool fails here.
+      expect(toolsBody.result.tools.map((tool) => tool.name).sort()).toEqual([
+        "comment",
+        "create_work",
+        "get_work",
+        "list_work",
+        "my_work",
+        "update_work",
+      ]);
+      expect(toolsBody.result.tools.length).toBe(6);
 
       // SIGTERM graceful shutdown (also required by the Task 19 matrix).
       server.kill("SIGTERM");
