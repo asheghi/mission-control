@@ -4,9 +4,9 @@ import { setNavigateRenderer } from "../legacy-bridge.js";
 import { isTerminalAuthError } from "../public-errors.js";
 import { views } from "../views.js";
 import { createLiveRefreshController, liveIndicatorState, navigationState, resolveHashRoute } from "../ui-state.js";
-import { LegacyView } from "./LegacyView";
+import { ViewHost } from "./LegacyView";
 import { safeErrorMessage } from "./safe-error";
-import type { EventStreamHandle, LegacyRoute, LegacyViewDefinition, LiveController } from "./types";
+import type { EventStreamHandle, LiveController, ViewDefinition, ViewRoute } from "./types";
 
 interface LoginProps {
   onSignedIn: (hash: string) => void;
@@ -77,13 +77,13 @@ function Login({ onSignedIn }: LoginProps) {
 export function AppShell() {
   const [signedIn, setSignedIn] = useState(() => Boolean(api.getToken()));
   const [hash, setHash] = useState(() => location.hash || "#/board");
-  const [mountGeneration, setMountGeneration] = useState(0);
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [connected, setConnected] = useState(false);
   const feedRef = useRef<EventStreamHandle | null>(null);
   const startFeedRef = useRef<() => void>(() => undefined);
   const refreshViewRef = useRef<() => void>(() => undefined);
 
-  refreshViewRef.current = () => setMountGeneration((value) => value + 1);
+  refreshViewRef.current = () => setRefreshGeneration((value) => value + 1);
 
   const controllerRef = useRef<LiveController | null>(null);
   if (controllerRef.current === null) {
@@ -166,9 +166,9 @@ export function AppShell() {
     return () => setNavigateRenderer(null);
   }, []);
 
-  const route = useMemo(() => resolveHashRoute(views, hash) as LegacyRoute, [hash]);
+  const route = useMemo(() => resolveHashRoute(views, hash) as ViewRoute, [hash]);
   const navEntries = useMemo(
-    () => Object.entries(views as Record<string, LegacyViewDefinition>)
+    () => Object.entries(views as Record<string, ViewDefinition>)
       .filter(([, entry]) => !entry.hidden)
       .map(([name, entry]) => ({ ...entry, name })),
     [],
@@ -230,11 +230,11 @@ export function AppShell() {
         </div>
       </header>
       <main class="content" id="content" tabIndex={-1}>
-        <LegacyView
-          key={`${hash}:${mountGeneration}`}
+        <ViewHost
+          key={hash}
           view={route.view}
           params={route.params}
-          generation={mountGeneration}
+          generation={refreshGeneration}
           onAuthenticationFailure={authenticationFailed}
         />
       </main>

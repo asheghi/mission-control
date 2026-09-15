@@ -1,13 +1,17 @@
 import { useEffect, useRef } from "preact/hooks";
 import { isTerminalAuthError } from "../public-errors.js";
-import type { LegacyLifecycleHandle, LegacyViewDefinition } from "./types";
+import type { LegacyLifecycleHandle, LegacyViewDefinition, ViewDefinition } from "./types";
 import { safeErrorMessage } from "./safe-error";
 
-interface LegacyViewProps {
-  view: LegacyViewDefinition | undefined;
+interface ViewHostProps {
+  view: ViewDefinition | undefined;
   params: Record<string, unknown>;
   generation: number;
   onAuthenticationFailure: () => void;
+}
+
+interface LegacyHostProps extends ViewHostProps {
+  view: LegacyViewDefinition;
 }
 
 function showMountError(slot: HTMLDivElement, error: unknown): void {
@@ -18,12 +22,12 @@ function showMountError(slot: HTMLDivElement, error: unknown): void {
   slot.replaceChildren(banner);
 }
 
-export function LegacyView({ view, params, generation, onAuthenticationFailure }: LegacyViewProps) {
+function LegacyHost({ view, params, generation, onAuthenticationFailure }: LegacyHostProps) {
   const slotRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const slot = slotRef.current;
-    if (slot === null || view === undefined) return;
+    if (slot === null) return;
 
     let detached = false;
     let handle: LegacyLifecycleHandle | null = null;
@@ -68,3 +72,28 @@ export function LegacyView({ view, params, generation, onAuthenticationFailure }
 
   return <div ref={slotRef} />;
 }
+
+export function ViewHost({ view, params, generation, onAuthenticationFailure }: ViewHostProps) {
+  if (view === undefined) return null;
+  if (view.kind === "component") {
+    const Component = view.component;
+    return (
+      <Component
+        params={params}
+        refreshGeneration={generation}
+        onAuthenticationFailure={onAuthenticationFailure}
+      />
+    );
+  }
+  return (
+    <LegacyHost
+      view={view}
+      params={params}
+      generation={generation}
+      onAuthenticationFailure={onAuthenticationFailure}
+    />
+  );
+}
+
+/** Backward-compatible export while callers migrate to the generic host name. */
+export const LegacyView = ViewHost;

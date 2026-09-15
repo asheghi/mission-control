@@ -62,9 +62,98 @@ const LEGACY_MODULE_PATHS = [
 // may survive in the served bundle or document.
 const PHASE_A_MARKERS = ["preact-marker", "phase-a", "Preact browser build active"] as const;
 
+// --- Phase C: the typed board -------------------------------------------------
+//
+// Phase C moves board rendering out of the legacy `src/web/board.js` module and
+// into `src/web/features/board/*`, registered through the same view registry as
+// a Preact component. The bundle is minified, so nothing below may depend on a
+// minified identifier, a formatting choice, or a helper's internal variable
+// name. Every marker is either a literal that survives minification (a class
+// name, an ARIA attribute, a visible string) or a DOM API the board must call.
+
+// Product markers of the typed board: the column structure, the card's semantic
+// native anchor, the status control, and per-column quick add.
+const TYPED_BOARD_MARKERS = [
+  "board-column",
+  "board-column-title",
+  "board-cards",
+  "board-card-top",
+  "board-card-bottom",
+  "board-card-people",
+  "quick-add",
+] as const;
+
+// Markers proving the card's status control is a native form control the
+// keyboard can drive, not a div with a click handler.
+const TYPED_BOARD_CONTROL_MARKERS = ["aria-labelledby", "Move #", "to status", "Drop"] as const;
+
+// The accessible-name and delegation strings the promoted card carries. These
+// are the user-visible text, so they are contract, not implementation. The
+// assignee label is assembled at runtime (`Assigned to ${name}, ${kind}`), so
+// the minifier keeps the two halves as separate literals and the bundle is
+// asserted on those halves rather than on the interpolated whole.
+const TYPED_BOARD_LABEL_MARKERS = [
+  "Add item to",
+  "Assigned to ",
+  "Unassigned",
+  "1 comment",
+  " comments",
+] as const;
+
+// Signatures of the legacy `src/web/board.js` module that the typed component
+// replaced. These are source-level names, so they survive minification only if
+// that module is actually bundled — which is exactly the regression to catch.
+// The legacy board wired its drag & drop imperatively with these exact
+// listener/classlist calls, and its card carried a `role="link"` + click
+// navigation instead of a real anchor.
+const LEGACY_BOARD_SIGNATURES = [
+  'addEventListener("dragover"',
+  'addEventListener("drop"',
+  "classList.add(\"drop-target\")",
+  'role: "link"',
+  "cardNode",
+  "quickAddForm",
+  "renderCards",
+  "changeStatus",
+] as const;
+
+// Third-party origins that must never appear in a served asset. A CDN script,
+// a remote font, or an analytics beacon would all show up here.
+const THIRD_PARTY_HOSTS = [
+  "cdn.jsdelivr.net",
+  "unpkg.com",
+  "cdnjs.cloudflare.com",
+  "esm.sh",
+  "skypack.dev",
+  "googleapis.com",
+  "gstatic.com",
+  "fonts.googleapis.com",
+  "reactjs.org",
+  "preactjs.com",
+] as const;
+
+// Router and state-library signatures that Phase C's frozen decisions exclude:
+// one hash-based shell owns routing, and board state lives in hooks.
+const DISALLOWED_LIBRARY_SIGNATURES = [
+  "preact-router",
+  "preact/compat",
+  "TanStack",
+  "QueryClient",
+  "createStore",
+  "redux",
+  "zustand",
+  "mobx",
+  "nanostores",
+] as const;
+
 /** Marker strings, matched literally rather than as regular expressions. */
 function contains(haystack: string, needle: string): boolean {
   return haystack.includes(needle);
+}
+
+/** Total occurrences of a literal marker in a bundle. */
+function occurrences(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1;
 }
 
 function startWithAssets(assets: Record<string, StaticAsset>): { url: string; stop(): void } {
@@ -471,6 +560,296 @@ describe("static web shell", () => {
       expect(healthz.status).toBe(404);
       expect(healthz.headers.get("content-type")).toContain("application/json");
       expect(await healthz.text()).not.toContain("shadowed");
+    } finally {
+      server.stop();
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase C — the typed board
+//
+// Phase C is a replacement, not an addition: `src/web/features/board/*` renders
+// the board as a Preact component registered as `kind: "component"`, and the
+// legacy `src/web/board.js` module is no longer part of the UI. Two failure
+// modes are worth a test apiece, and neither is visible to a unit test:
+//
+//   1. The replacement silently does not ship — the bundle is built from a
+//      different entrypoint, or a stale asset table is embedded — so the board
+//      renders nothing and no build error is raised.
+//   2. The legacy module ships *alongside* the new component, re-registering the
+//      `board` view and wiring a second set of global drag listeners. Phase B's
+//      acceptance explicitly allows legacy modules to coexist temporarily; Phase
+//      C is where the board stops being one of them.
+// -----------------------------------------------------------------------------
+describe("typed board bundle (Phase C)", () => {
+  test("the served bundle carries the typed board's markers", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // The column structure and card chrome the product components render.
+    for (const marker of TYPED_BOARD_MARKERS) {
+      expect(contains(js, marker), `typed board marker missing: ${marker}`).toBe(true);
+    }
+    // The board still shows its four columns by their visible labels.
+    for (const label of ["To do", "Doing", "Blocked", "Done"]) {
+      expect(contains(js, label), `column label missing: ${label}`).toBe(true);
+    }
+    // The empty-column and load-failure states survive the migration.
+    expect(js).toContain("No items");
+    expect(js).toContain("Retry");
+    expect(js).toContain("Loading board");
+  });
+
+  test("the promoted card uses a semantic native anchor and native status control", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // Phase C requirement: the card title is a real anchor, so it is reachable,
+    // focusable, and activatable without a synthetic role or key handler. The
+    // legacy card was a `div` with `role="link"`, a tabindex, and a click
+    // handler — asserted gone below.
+    expect(js).toContain("board-card-title");
+    expect(js).toContain("#/item/");
+    expect(js).toContain("href");
+    // The element types are passed to the DOM as strings, so the anchor and the
+    // article wrapper survive minification as literals.
+    expect(js).toContain('"a"');
+    expect(js).toContain('"article"');
+
+    // The status control is a native `<select>` with an accessible name, which
+    // is what makes a keyboard-only status change possible without drag. Note
+    // that a Preact bundle never contains HTML source text, so these are the
+    // element-type and prop literals rather than a `<select` tag.
+    expect(js).toContain("Move #");
+    expect(js).toContain("to status");
+    expect(js).toContain('"select"');
+    expect(js).toContain('"option"');
+    expect(js).toContain("onChange");
+    // The keyboard alternative to dragging: the card title handles Left/Right.
+    expect(js).toContain("ArrowLeft");
+    expect(js).toContain("ArrowRight");
+    expect(js).toContain("onKeyDown");
+    expect(js).toContain("preventDefault");
+  });
+
+  test("the typed board's accessible names and delegation contract ship", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    for (const marker of TYPED_BOARD_LABEL_MARKERS) {
+      expect(contains(js, marker), `accessible-name marker missing: ${marker}`).toBe(true);
+    }
+
+    // Quick add is labelled per column ("Add item to <column>") and guards
+    // against a blank title before issuing a create.
+    expect(js).toContain("Add item to");
+    expect(js).toContain("trim");
+    expect(js).toContain("maxLength");
+    expect(js).toContain("256");
+
+    // Drag & drop is still present, and it still reads the payload it wrote.
+    // Preact's slot props keep their documented camelCase names through
+    // minification, so `onDragStart`/`onDrop` are exactly the migrated handlers
+    // rather than the legacy module's imperative listeners.
+    expect(js).toContain("draggable");
+    expect(js).toContain("onDragStart");
+    expect(js).toContain("onDragOver");
+    expect(js).toContain("onDragLeave");
+    expect(js).toContain("onDrop");
+    expect(js).toContain("onDragEnd");
+    expect(js).toContain("getData");
+    expect(js).toContain("setData");
+    expect(js).toContain("text/plain");
+    expect(js).toContain("effectAllowed");
+    expect(js).toContain("dropEffect");
+    // The drop-target highlight class the column renders.
+    expect(js).toContain("drop-target");
+
+    // The columns are labelled regions, and the board announces its own state.
+    expect(js).toContain("aria-labelledby");
+    expect(js).toContain("aria-live");
+    expect(js).toContain("board-status");
+    expect(js).toContain("role");
+  });
+
+  test("the board view is registered as a Preact component, not a legacy mount", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // `features/board/index.ts` registers `{ kind: "component", component }`.
+    // The string survives minification; the object shape is unit-tested at the
+    // source level, so this asserts the component path is the one bundled.
+    expect(js).toContain("component");
+    expect(js).toContain("Board");
+    // The shell's navigation entry for the board is still present.
+    expect(js).toContain("#/board");
+  });
+
+  test("the legacy board module is not bundled", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // Source-level names and calls from `src/web/board.js`. These are exactly
+    // the identifiers a minifier leaves alone, so their presence would mean the
+    // legacy module is still in the graph — and with it a second `board` view
+    // registration and a second set of global drag listeners.
+    for (const signature of LEGACY_BOARD_SIGNATURES) {
+      expect(contains(js, signature), `legacy board signature present: ${signature}`).toBe(false);
+    }
+
+    // The legacy module's imperative drag wiring added listeners directly to
+    // each column and toggled the class by hand. The component path expresses
+    // the same behavior through Preact props, so no `dragover` listener is
+    // registered imperatively at all.
+    expect(js).not.toContain('addEventListener("dragover"');
+    expect(js).not.toContain('addEventListener("drop"');
+    expect(js).not.toContain('removeEventListener("dragover"');
+    // Its `role="link"` card navigation is gone with it.
+    expect(js).not.toContain('role: "link"');
+    expect(js).not.toContain('role="link"');
+  });
+
+  test("no router, state library, or third-party asset is bundled", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    // State libraries and routers stay out: one hash-based shell owns routing
+    // and board state lives in Preact hooks.
+    for (const signature of DISALLOWED_LIBRARY_SIGNATURES) {
+      expect(contains(js, signature), `disallowed library present: ${signature}`).toBe(false);
+    }
+    // React itself is not bundled. Preact's `preact/compat` alias is the way
+    // that would happen by accident, and `react-dom` is the other.
+    expect(js).not.toContain("react-dom");
+    expect(js).not.toContain("ReactDOM");
+
+    // No third-party host appears in either served asset.
+    for (const host of THIRD_PARTY_HOSTS) {
+      expect(contains(js, host), `third-party host in JavaScript: ${host}`).toBe(false);
+      expect(contains(css, host), `third-party host in stylesheet: ${host}`).toBe(false);
+    }
+
+    // Every URL literal left in the bundle is an XML namespace identifier —
+    // a string passed to `createElementNS`, not a fetch target. This is the
+    // same distinction the entry document's favicon makes: the SVG namespace
+    // URI is an identifier, not a request.
+    const NAMESPACE_IDENTIFIERS = [
+      "http://www.w3.org/2000/svg",
+      "http://www.w3.org/1998/Math/MathML",
+      "http://www.w3.org/1999/xhtml",
+    ] as const;
+    const urlLiterals = [...js.matchAll(/["']([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^"'\s]{0,120})["']/g)]
+      .map((match) => match[1]!);
+    for (const literal of urlLiterals) {
+      expect(
+        NAMESPACE_IDENTIFIERS as readonly string[],
+        `unexpected remote URL literal in bundle: ${literal}`,
+      ).toContain(literal);
+      // Protocol-relative and plainly remote origins are never a namespace.
+      expect(literal.startsWith("//"), literal).toBe(false);
+    }
+    // No protocol-relative reference anywhere, which is how a remote asset
+    // would sneak past a same-origin looking path check.
+    expect(js).not.toContain('"//');
+    expect(js).not.toContain("'//");
+    // The stylesheet fetches nothing at all: no @import, no remote font, and no
+    // url() of any kind.
+    expect(css).not.toContain("@import");
+    expect(css).not.toContain("@font-face");
+    expect(css).not.toContain("url(");
+  });
+
+  test("exactly one live SSE path is compiled in", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // One event-feed owner: the shell subscribes once, and the board refreshes
+    // from it through props rather than opening its own stream.
+    expect(occurrences(js, "api/events")).toBe(1);
+    // One transport implementation: the fetch-stream reader with the bearer
+    // header. A browser-native EventSource cannot carry the header, and a
+    // WebSocket transport was never part of the design.
+    expect(js).not.toContain("EventSource");
+    expect(js).not.toContain("WebSocket");
+    expect(js).toContain("text/event-stream");
+    expect(js).toContain("Authorization");
+    // The lifecycle handle the shell closes on sign-out is still present.
+    expect(js).toContain("abort");
+  });
+
+  test("the public asset contract is unchanged by the board migration", () => {
+    // Phase C swapped the board renderer only. The asset table, the fixed path
+    // set, and the content types must be byte-for-byte the same contract.
+    expect(Object.keys(STATIC_ASSETS).sort()).toEqual([...EXPECTED_PATHS].sort());
+    expect(STATIC_ASSETS["/assets/app.js"]?.contentType).toBe(JS_TYPE);
+    expect(STATIC_ASSETS["/assets/styles.css"]?.contentType).toBe(CSS_TYPE);
+    expect(STATIC_ASSETS["/"]?.contentType).toBe(HTML_TYPE);
+    expect(STATIC_ASSETS["/"]!.body).toBe(STATIC_ASSETS["/index.html"]!.body);
+
+    // The document still loads one script and one stylesheet, both same-origin.
+    const html = STATIC_ASSETS["/"]!.body;
+    const scripts = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/g)].map((match) => match[1]!);
+    expect(scripts).toEqual(["/assets/app.js"]);
+    const stylesheets = [...html.matchAll(/<link\b[^>]*\brel="stylesheet"[^>]*\bhref="([^"]+)"/g)]
+      .map((match) => match[1]!);
+    expect(stylesheets).toEqual(["/assets/styles.css"]);
+    expect(html.match(/<script\b/g)?.length).toBe(1);
+    // No remote reference of any kind in the document.
+    for (const value of html.matchAll(/(?:href|src)="([^"]*)"/g)) {
+      const reference = value[1]!;
+      if (reference === "" || reference.startsWith("data:")) continue;
+      expect(reference, "remote reference").not.toMatch(/^(https?:)?\/\//);
+      expect(reference, "non-absolute reference").toStartWith("/");
+    }
+  });
+
+  test("branding survives the board migration", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const html = STATIC_ASSETS["/"]!.body;
+
+    // The Phase B branding contract is unchanged by Phase C.
+    expect(js).toContain("Workboard");
+    expect(js).toContain("Workboard home");
+    expect(js).toContain("Primary navigation");
+    expect(js).toContain("Sign out");
+    expect(js).toContain("live-indicator");
+    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain('id="app"');
+
+    // And the Phase A placeholder shell is still absent.
+    for (const marker of PHASE_A_MARKERS) {
+      expect(js, marker).not.toContain(marker);
+    }
+  });
+
+  test("the typed board renders against a live server at the fixed asset paths", async () => {
+    // The markers above are asserted on the embedded table; this proves the
+    // same bytes reach a browser over the real route, under the same content
+    // type and cache policy, after the board migration.
+    const server = startWithStatic();
+    try {
+      const bundle = await fetch(`${server.url}/assets/app.js`);
+      expect(bundle.status).toBe(200);
+      expect(bundle.headers.get("content-type")).toBe(JS_TYPE);
+      expect(bundle.headers.get("cache-control")).toBe("no-cache");
+      const served = await bundle.text();
+      expect(served).toBe(STATIC_ASSETS["/assets/app.js"]!.body);
+      // The typed board's structure is in what the browser actually receives.
+      expect(served).toContain("board-column");
+      expect(served).toContain("Move #");
+      expect(served).toContain("Add item to");
+      expect(served).not.toContain("cardNode");
+
+      // The legacy board module URL stays a 404 rather than becoming a second,
+      // independently loadable copy of the board.
+      const legacy = await fetch(`${server.url}/assets/board.js`);
+      expect(legacy.status).toBe(404);
+      expect(legacy.headers.get("content-type") ?? "").not.toContain("javascript");
+
+      // The stylesheet the typed board's class names resolve against is served
+      // from the same fixed path.
+      const styles = await fetch(`${server.url}/assets/styles.css`);
+      expect(styles.status).toBe(200);
+      expect(styles.headers.get("content-type")).toBe(CSS_TYPE);
+      const servedCss = await styles.text();
+      expect(servedCss).toContain("board-column");
+      expect(servedCss).toContain("board-card");
+      expect(servedCss).toContain("quick-add");
     } finally {
       server.stop();
     }

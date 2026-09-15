@@ -45,4 +45,10 @@ textarea {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+
+  .board-card,
+  .board-card:hover,
+  .board-card:focus-within {
+    transform: none;
+  }
 }

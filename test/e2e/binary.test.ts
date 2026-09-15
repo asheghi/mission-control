@@ -18,6 +18,40 @@ const BINARY = join(import.meta.dir, "..", "..", "dist", "workboard");
 // survive in the compiled bundle or the served document.
 const PHASE_A_MARKERS = ["preact-marker", "phase-a", "Preact browser build active"] as const;
 
+// --- Phase C: the typed board -------------------------------------------------
+//
+// The compiled binary embeds the browser bundle, so this is the only place the
+// *shipped* artifact is checked for the board migration. The markers are the
+// same class of literal the static suite uses — surviving minification because
+// they are DOM strings or Preact slot-prop names, never minified identifiers.
+// A Preact bundle contains no HTML source text, so element types are asserted
+// as their string literals (`"select"`), not as tags (`<select`).
+
+// The typed board's structure, card chrome, and per-column quick add.
+const TYPED_BOARD_MARKERS = [
+  "board-column",
+  "board-column-title",
+  "board-cards",
+  "board-card-top",
+  "board-card-bottom",
+  "board-card-people",
+  "quick-add",
+] as const;
+
+// Source-level signatures of the legacy `src/web/board.js` module. A minifier
+// leaves these names and calls alone, so their presence would mean the legacy
+// board is still bundled alongside the typed component.
+const LEGACY_BOARD_SIGNATURES = [
+  'addEventListener("dragover"',
+  'addEventListener("drop"',
+  'classList.add("drop-target")',
+  'role: "link"',
+  "cardNode",
+  "quickAddForm",
+  "renderCards",
+  "changeStatus",
+] as const;
+
 function run(args: string[], cwd: string): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync([BINARY, ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   return {
@@ -158,6 +192,75 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(bundleSource).not.toContain("EventSource");
       expect(bundleSource).not.toContain("WebSocket");
 
+      // --- Phase C: the typed board is what shipped ------------------------
+      //
+      // The board is now a Preact component. These markers prove the compiled
+      // binary serves the migrated board rather than a stale or empty bundle.
+      for (const marker of TYPED_BOARD_MARKERS) {
+        expect(bundleSource, `typed board marker missing: ${marker}`).toContain(marker);
+      }
+      // The four columns still render by their visible labels, and the empty
+      // and failure states survive the migration.
+      for (const label of ["To do", "Doing", "Blocked", "Done"]) {
+        expect(bundleSource, `column label missing: ${label}`).toContain(label);
+      }
+      expect(bundleSource).toContain("No items");
+      expect(bundleSource).toContain("Loading board");
+      // The card title is a semantic native anchor, not a synthetic role link.
+      expect(bundleSource).toContain("board-card-title");
+      expect(bundleSource).toContain("#/item/");
+      expect(bundleSource).toContain('"a"');
+      // The status control is a native select with an accessible name, and the
+      // title handles Left/Right so status changes work without dragging.
+      expect(bundleSource).toContain("Move #");
+      expect(bundleSource).toContain("to status");
+      expect(bundleSource).toContain('"select"');
+      expect(bundleSource).toContain("ArrowLeft");
+      expect(bundleSource).toContain("ArrowRight");
+      // Quick add is labelled per column and bounded.
+      expect(bundleSource).toContain("Add item to");
+      expect(bundleSource).toContain("maxLength");
+      // Drag & drop survives as Preact slot props, reading the payload it wrote.
+      expect(bundleSource).toContain("draggable");
+      expect(bundleSource).toContain("onDragStart");
+      expect(bundleSource).toContain("onDrop");
+      expect(bundleSource).toContain("getData");
+      expect(bundleSource).toContain("setData");
+      expect(bundleSource).toContain("text/plain");
+
+      // The legacy board module is not bundled: its imperative drag wiring and
+      // its unminified helper names are all gone.
+      for (const signature of LEGACY_BOARD_SIGNATURES) {
+        expect(bundleSource, `legacy board signature present: ${signature}`).not.toContain(signature);
+      }
+      expect(bundleSource).not.toContain('addEventListener("dragover"');
+      expect(bundleSource).not.toContain('role: "link"');
+      expect(bundleSource).not.toContain('role="link"');
+
+      // Exactly one event-feed owner: the SSE path appears once, and the
+      // board refreshes from it rather than opening a second stream.
+      expect(bundleSource.split("api/events").length - 1).toBe(1);
+
+      // No router or state library rode along, and React itself is absent.
+      for (const signature of ["preact-router", "preact/compat", "TanStack", "QueryClient", "zustand", "redux"]) {
+        expect(bundleSource, `disallowed library present: ${signature}`).not.toContain(signature);
+      }
+      expect(bundleSource).not.toContain("react-dom");
+      // No third-party host, and no remote URL literal beyond the XML namespace
+      // identifiers Preact passes to `createElementNS` — an identifier, not a
+      // request target, exactly as the favicon's SVG namespace is.
+      for (const host of ["cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "googleapis.com"]) {
+        expect(bundleSource, `third-party host present: ${host}`).not.toContain(host);
+      }
+      const namespaceIdentifiers = [
+        "http://www.w3.org/2000/svg",
+        "http://www.w3.org/1998/Math/MathML",
+        "http://www.w3.org/1999/xhtml",
+      ];
+      for (const match of bundleSource.matchAll(/["']([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^"'\s]{0,120})["']/g)) {
+        expect(namespaceIdentifiers, `unexpected remote URL literal: ${match[1]!}`).toContain(match[1]!);
+      }
+
       const styles = await fetch(`${baseUrl}/assets/styles.css`);
       expect(styles.headers.get("content-type")).toContain("text/css");
       const stylesSource = await styles.text();
@@ -176,6 +279,16 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       // Legacy selectors still coexist with the token layer.
       expect(stylesSource).toContain(".live-indicator");
       expect(stylesSource).toContain("--canvas-default:var(--wb-color-canvas-default)");
+      // Phase C: the typed board's class names resolve against this same
+      // single stylesheet, and it still fetches nothing at all.
+      expect(stylesSource).toContain("board-column");
+      expect(stylesSource).toContain("board-card");
+      expect(stylesSource).toContain("quick-add");
+      expect(stylesSource).not.toContain("@font-face");
+      expect(stylesSource).not.toContain("url(");
+      for (const host of ["cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "googleapis.com"]) {
+        expect(stylesSource, `third-party host in stylesheet: ${host}`).not.toContain(host);
+      }
 
       const created = await fetch(`${baseUrl}/api/items`, {
         method: "POST",

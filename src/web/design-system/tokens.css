@@ -27,6 +27,13 @@
   --wb-color-done-muted: rgba(130, 80, 223, 0.4);
   --wb-color-done-subtle: rgba(130, 80, 223, 0.1);
   --wb-color-neutral-emphasis: #6e7781;
+  --wb-color-neutral-subtle: rgba(175, 184, 193, 0.2);
+  --wb-color-danger-muted: rgba(255, 129, 130, 0.4);
+  --wb-color-attention-muted: rgba(212, 167, 44, 0.4);
+  --wb-color-success-muted: rgba(63, 185, 80, 0.4);
+  --wb-color-avatar-human-bg: #0969da;
+  --wb-color-avatar-agent-bg: #6f42c1;
+  --wb-color-avatar-fg: #ffffff;
   --wb-color-focus-outline: #0969da;
   --wb-color-active-indicator: #bc4c00;
   --wb-color-header-bg: #f6f8fa;
@@ -80,6 +87,13 @@
     --wb-color-done-muted: rgba(210, 168, 255, 0.4);
     --wb-color-done-subtle: rgba(210, 168, 255, 0.12);
     --wb-color-neutral-emphasis: #6e7681;
+    --wb-color-neutral-subtle: rgba(175, 184, 193, 0.2);
+    --wb-color-danger-muted: rgba(248, 81, 73, 0.4);
+    --wb-color-attention-muted: rgba(210, 153, 34, 0.4);
+    --wb-color-success-muted: rgba(63, 185, 80, 0.4);
+    --wb-color-avatar-human-bg: #1f6feb;
+    --wb-color-avatar-agent-bg: #6e40c9;
+    --wb-color-avatar-fg: #ffffff;
     --wb-color-focus-outline: #4493f8;
     --wb-color-active-indicator: #ffa657;
     --wb-color-header-bg: #010409;
