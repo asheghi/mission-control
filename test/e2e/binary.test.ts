@@ -52,6 +52,62 @@ const LEGACY_BOARD_SIGNATURES = [
   "changeStatus",
 ] as const;
 
+// --- Phase D: the typed list --------------------------------------------------
+//
+// The compiled binary embeds the browser bundle, so this is the only place the
+// *shipped* artifact is checked for the list migration. The markers are the same
+// class of literal the static suite uses — surviving minification because they
+// are DOM strings or Preact slot-prop names, never minified identifiers.
+
+// The typed list's structure: table, filter toolbar, bulk-selection bar, footer.
+const TYPED_LIST_MARKERS = [
+  "list-view",
+  "list-toolbar",
+  "list-table-scroller",
+  "list-table",
+  "list-labels",
+  "list-item-title",
+  "list-empty-row",
+  "list-footer",
+  "selection-bar",
+  "checkbox-hit-area",
+] as const;
+
+// The visible strings a user reads, so they are contract rather than detail.
+const TYPED_LIST_LABEL_MARKERS = [
+  "Filter work items",
+  "All statuses",
+  "Any assignee",
+  "Any label",
+  "Search titles",
+  "Clear filters",
+  "Load more",
+  "Bulk actions",
+  "Select all loaded work items",
+  "Select work item #",
+  "Work items table",
+  "No work items match these filters.",
+  "item(s) loaded",
+] as const;
+
+// Source-level signatures of the legacy `src/web/list.js` module. Their presence
+// would mean the legacy list still ships alongside the typed component, with a
+// second `list` view registration and synthetic `role="link"` rows.
+const LEGACY_LIST_SIGNATURES = [
+  "updateSelectionBar",
+  "reapplyAssigneeFilter",
+  "reapplyLabelFilter",
+  "reapplySelectFilter",
+  "syncClearButton",
+  "renderRows",
+  "resetFilters",
+  "fetchPage",
+  'role: "link"',
+  "Open work item #",
+  "Assign to…",
+  "Select #",
+] as const;
+
 function run(args: string[], cwd: string): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync([BINARY, ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   return {
@@ -156,6 +212,9 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
         "/assets/shell/AppShell.js",
         "/assets/board.js",
         "/assets/list.js",
+        "/assets/features/list.js",
+        "/assets/features/list/index.js",
+        "/assets/features/list/ListView.js",
         "/assets/detail.js",
         "/app.js",
         "/assets/app.js.map",
@@ -241,6 +300,52 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       // board refreshes from it rather than opening a second stream.
       expect(bundleSource.split("api/events").length - 1).toBe(1);
 
+      // --- Phase D: the typed list is what shipped -------------------------
+      //
+      // The list is now a Preact component. These markers prove the compiled
+      // binary serves the migrated list rather than a stale or empty bundle.
+      for (const marker of TYPED_LIST_MARKERS) {
+        expect(bundleSource, `typed list marker missing: ${marker}`).toContain(marker);
+      }
+      for (const marker of TYPED_LIST_LABEL_MARKERS) {
+        expect(bundleSource, `typed list label missing: ${marker}`).toContain(marker);
+      }
+      // The empty, loading, and failure states survive the migration, so a user
+      // never sees a blank table with no explanation.
+      expect(bundleSource).toContain("Loading work items…");
+      expect(bundleSource).toContain("Retry");
+      for (const message of [
+        "Could not load work items. Please try again.",
+        "Some filter options could not be loaded.",
+        "Workboard returned list data in an unexpected format.",
+        "Could not load more work items because pagination did not advance.",
+      ]) {
+        expect(bundleSource, `list error message missing: ${message}`).toContain(message);
+      }
+      // The list is built from native controls and links each row with a real
+      // anchor to the same `#/item/` route the board's card uses.
+      expect(bundleSource).toContain('"select"');
+      expect(bundleSource).toContain('"table"');
+      expect(bundleSource).toContain("#/item/");
+      expect(bundleSource).toContain("assigneeId");
+      expect(bundleSource).toContain("Unassign");
+
+      // Board and list are registered side by side with the same component shape,
+      // and the list route is registered exactly once.
+      expect(bundleSource).toContain('{kind:"component",title:"List",href:"#/list",component:');
+      expect(bundleSource).toContain('{kind:"component",title:"Board",href:"#/board",component:');
+      expect(bundleSource.split('title:"List",href:"#/list"').length - 1).toBe(1);
+      // Detail is still the one legacy view, registered with `mount`, so the check
+      // below is testing for the list's signatures rather than for `mount`.
+      expect(bundleSource).toContain('{title:"Item",href:"#/item"');
+
+      // The legacy list module is not bundled: its imperative row and filter
+      // helpers, its synthetic role-link rows, and its own visible strings are
+      // all gone.
+      for (const signature of LEGACY_LIST_SIGNATURES) {
+        expect(bundleSource, `legacy list signature present: ${signature}`).not.toContain(signature);
+      }
+
       // No router or state library rode along, and React itself is absent.
       for (const signature of ["preact-router", "preact/compat", "TanStack", "QueryClient", "zustand", "redux"]) {
         expect(bundleSource, `disallowed library present: ${signature}`).not.toContain(signature);
@@ -284,6 +389,12 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(stylesSource).toContain("board-column");
       expect(stylesSource).toContain("board-card");
       expect(stylesSource).toContain("quick-add");
+      // Phase D: the typed list's class names resolve against it too.
+      expect(stylesSource).toContain("list-table");
+      expect(stylesSource).toContain("list-toolbar");
+      expect(stylesSource).toContain("selection-bar");
+      expect(stylesSource).toContain("checkbox-hit-area");
+      // The stylesheet still fetches nothing at all, after both migrations.
       expect(stylesSource).not.toContain("@font-face");
       expect(stylesSource).not.toContain("url(");
       for (const host of ["cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "googleapis.com"]) {

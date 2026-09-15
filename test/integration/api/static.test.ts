@@ -53,6 +53,10 @@ const LEGACY_MODULE_PATHS = [
   "/assets/shell/LegacyView.js",
   "/assets/board.js",
   "/assets/list.js",
+  "/assets/features/list.js",
+  "/assets/features/list/index.js",
+  "/assets/features/list/data.js",
+  "/assets/features/list/ListView.js",
   "/assets/detail.js",
   "/assets/app.js.map",
   "/assets/ui-state.js.map",
@@ -115,6 +119,101 @@ const LEGACY_BOARD_SIGNATURES = [
   "quickAddForm",
   "renderCards",
   "changeStatus",
+] as const;
+
+// -----------------------------------------------------------------------------
+// Phase D — the typed list
+//
+// Phase D moves list rendering out of the legacy `src/web/list.js` module and
+// into `src/web/features/list/*`, registered through the same view registry as a
+// Preact component. As with the board, the bundle is minified, so nothing below
+// may depend on a minified identifier, a formatting choice, or a helper's
+// internal variable name. Every marker is a literal that survives minification —
+// a class name, an ARIA attribute, a visible string, or a Preact slot-prop name.
+// -----------------------------------------------------------------------------
+
+// Product markers of the typed list: the table structure, the filter toolbar, the
+// bulk-selection bar, and the pagination footer.
+const TYPED_LIST_MARKERS = [
+  "list-view",
+  "list-toolbar",
+  "list-table-scroller",
+  "list-table",
+  "list-labels",
+  "list-item-title",
+  "list-empty-row",
+  "list-footer",
+  "selection-bar",
+  "checkbox-hit-area",
+] as const;
+
+// The accessible names and states the typed list carries. These are the
+// user-visible strings, so they are contract rather than implementation. Both the
+// hidden `<span>` and the `aria-label` fallback forms ship, because a Preact
+// bundle contains no HTML source text.
+const TYPED_LIST_LABEL_MARKERS = [
+  "Filter work items",
+  "All statuses",
+  "Any assignee",
+  "Any label",
+  "Search titles",
+  "Clear filters",
+  "Load more",
+  "Bulk actions",
+  "Select all loaded work items",
+  "Select work item #",
+  "Work items table",
+  "No work items match these filters.",
+  "item(s) loaded",
+] as const;
+
+// The three list failure states, which the hook renders as its own literal text.
+// They survive minification and are the strings a user actually sees.
+const TYPED_LIST_ERROR_MARKERS = [
+  "Could not load work items. Please try again.",
+  "Some filter options could not be loaded.",
+  "Workboard returned list data in an unexpected format.",
+  "Could not load more work items because pagination did not advance.",
+] as const;
+
+// The list refreshes from the shell's single event feed through props. These are
+// the native controls the toolbar and selection bar are built from — asserted as
+// element-type strings, since a Preact bundle holds no `<select` tag text.
+const TYPED_LIST_CONTROL_MARKERS = [
+  '"select"',
+  '"option"',
+  '"input"',
+  '"table"',
+  '"caption"',
+  '"tr"',
+  '"td"',
+  "onChange",
+  "onInput",
+  "maxLength",
+  "autoComplete",
+] as const;
+
+// Signatures of the legacy `src/web/list.js` module that the typed component
+// replaced. These are source-level names and calls, so a minifier leaves them
+// alone — which is exactly why their presence would mean the legacy module is
+// still in the graph, re-registering the `list` view as a legacy `mount` and
+// wiring a second set of imperative row handlers.
+const LEGACY_LIST_SIGNATURES = [
+  "updateSelectionBar",
+  "reapplyAssigneeFilter",
+  "reapplyLabelFilter",
+  "reapplySelectFilter",
+  "syncClearButton",
+  "renderRows",
+  "resetFilters",
+  "fetchPage",
+  // Its per-row rendering built a synthetic `role="link"` row that navigated on
+  // click/keydown instead of a real anchor.
+  'role: "link"',
+  "Open work item #",
+  // Its visible strings, distinct from the typed list's.
+  "Assign to…",
+  "Select #",
 ] as const;
 
 // Third-party origins that must never appear in a served asset. A CDN script,
@@ -850,6 +949,246 @@ describe("typed board bundle (Phase C)", () => {
       expect(servedCss).toContain("board-column");
       expect(servedCss).toContain("board-card");
       expect(servedCss).toContain("quick-add");
+    } finally {
+      server.stop();
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase D — the typed list
+//
+// Phase D is a replacement, not an addition: `src/web/features/list/*` renders
+// the list as a Preact component registered as `kind: "component"`, and the
+// legacy `src/web/list.js` module is no longer part of the UI. The two failure
+// modes are the same ones Phase C guarded for the board, and neither is visible
+// to a unit test:
+//
+//   1. The replacement silently does not ship — the bundle is built from a
+//      different entrypoint, or a stale asset table is embedded — so the list
+//      renders nothing and no build error is raised.
+//   2. The legacy module ships *alongside* the new component, re-registering the
+//      `list` view with a `mount` and restoring the synthetic `role="link"` rows
+//      and imperative filter handlers Phase D replaced.
+//
+// The Board and Detail contracts must survive the migration unchanged, so those
+// are re-asserted here rather than assumed from the Phase C block.
+// -----------------------------------------------------------------------------
+describe("typed list bundle (Phase D)", () => {
+  test("the served bundle carries the typed list's markers", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // The table, filter toolbar, selection bar, and footer the components render.
+    for (const marker of TYPED_LIST_MARKERS) {
+      expect(contains(js, marker), `typed list marker missing: ${marker}`).toBe(true);
+    }
+    // The empty and loading states survive the migration.
+    expect(js).toContain("No work items match these filters.");
+    expect(js).toContain("Loading work items…");
+    expect(js).toContain("Refreshing work items…");
+  });
+
+  test("the typed list's accessible names and states ship", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    for (const marker of TYPED_LIST_LABEL_MARKERS) {
+      expect(contains(js, marker), `accessible-name marker missing: ${marker}`).toBe(true);
+    }
+    // The list announces its own state through a polite live region, and its
+    // error alert offers a Retry.
+    expect(js).toContain("aria-live");
+    expect(js).toContain("aria-atomic");
+    expect(js).toContain("Retry");
+    // Every failure the hook can publish is a literal in the bundle, so the user
+    // never sees a blank table with no explanation.
+    for (const marker of TYPED_LIST_ERROR_MARKERS) {
+      expect(contains(js, marker), `list error marker missing: ${marker}`).toBe(true);
+    }
+  });
+
+  test("the list is built from native form controls and real anchors", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    for (const marker of TYPED_LIST_CONTROL_MARKERS) {
+      expect(contains(js, marker), `list control marker missing: ${marker}`).toBe(true);
+    }
+    // Rows link to the detail view with a real anchor — the same `#/item/` route
+    // the typed board's card uses — rather than the legacy synthetic role link.
+    expect(js).toContain("#/item/");
+    // Scrollable table region and its accessible name.
+    expect(js).toContain("list-table-scroller");
+    expect(js).toContain("Work items table");
+    // Bulk assign delegates to the same update call the detail view uses.
+    expect(js).toContain("assigneeId");
+    expect(js).toContain("Unassign");
+
+    // The list's class names resolve against the one served stylesheet.
+    for (const selector of ["list-table", "list-toolbar", "selection-bar", "list-footer", "checkbox-hit-area"]) {
+      expect(contains(css, selector), `list selector missing from stylesheet: ${selector}`).toBe(true);
+    }
+  });
+
+  test("the list view is registered as a Preact component, not a legacy mount", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // `features/list/index.ts` registers `{ kind: "component", component }`. The
+    // strings survive minification; the object shape is unit-tested at the source
+    // level, so this asserts the component path is the one bundled. Board and
+    // list sit side by side with identical registration shapes.
+    expect(js).toContain('{kind:"component",title:"List",href:"#/list",component:');
+    expect(js).toContain('{kind:"component",title:"Board",href:"#/board",component:');
+    // The shell's navigation entry for the list is still present.
+    expect(js).toContain("#/list");
+    // Exactly one registration of the list route: a second one would mean two
+    // `list` view definitions competing for the same hash route.
+    expect(occurrences(js, 'title:"List",href:"#/list"')).toBe(1);
+  });
+
+  test("the legacy list module is not bundled or served", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // Source-level names and calls from `src/web/list.js`. A minifier leaves these
+    // alone, so their presence would mean the legacy module is still in the graph
+    // — and with it a second `list` view registration and a second set of
+    // imperative row and filter handlers.
+    for (const signature of LEGACY_LIST_SIGNATURES) {
+      expect(contains(js, signature), `legacy list signature present: ${signature}`).toBe(false);
+    }
+    // Detail is still the one legacy view that ships; its `mount` registration
+    // must remain, which proves the check above is testing for the *list*
+    // signature rather than for `mount` existing at all.
+    expect(js).toContain('{title:"Item",href:"#/item"');
+
+    // No former module URL serves a second, independently loadable copy of the
+    // list — neither the legacy source module nor a pre-bundle feature module.
+    for (const path of [
+      "/assets/list.js",
+      "/assets/features/list.js",
+      "/assets/features/list/index.js",
+      "/assets/features/list/ListView.js",
+    ]) {
+      expect(STATIC_ASSETS[path], `list module URL is served: ${path}`).toBeUndefined();
+    }
+  });
+
+  test("the Board and Detail contracts survive the list migration", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    // The typed board is unchanged by Phase D.
+    for (const marker of TYPED_BOARD_MARKERS) {
+      expect(contains(js, marker), `typed board marker missing: ${marker}`).toBe(true);
+    }
+    expect(js).toContain("Move #");
+    expect(js).toContain("Add item to");
+    for (const signature of LEGACY_BOARD_SIGNATURES) {
+      expect(contains(js, signature), `legacy board signature present: ${signature}`).toBe(false);
+    }
+
+    // Detail is still the one legacy view, registered with `mount`, and still
+    // reachable from both migrated views through the same `#/item/` route.
+    expect(js).toContain('mount:');
+    expect(js).toContain('title:"Item",href:"#/item"');
+    expect(js).toContain("hidden:!0");
+    expect(js).toContain("#/item/");
+    expect(css).toContain(".board-card");
+    expect(css).toContain(".list-table");
+  });
+
+  test("no router, state library, or third-party asset is bundled", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    // The Phase C exclusions still hold after Phase D: one hash-based shell owns
+    // routing and list state lives in Preact hooks rather than a store.
+    for (const signature of DISALLOWED_LIBRARY_SIGNATURES) {
+      expect(contains(js, signature), `disallowed library present: ${signature}`).toBe(false);
+    }
+    expect(js).not.toContain("react-dom");
+    expect(js).not.toContain("ReactDOM");
+    for (const host of THIRD_PARTY_HOSTS) {
+      expect(contains(js, host), `third-party host in JavaScript: ${host}`).toBe(false);
+      expect(contains(css, host), `third-party host in stylesheet: ${host}`).toBe(false);
+    }
+    // Still exactly one event-feed owner and one transport after the migration.
+    expect(occurrences(js, "api/events")).toBe(1);
+    expect(js).not.toContain("EventSource");
+    expect(js).not.toContain("WebSocket");
+  });
+
+  test("the public asset contract is unchanged by the list migration", () => {
+    // Phase D swapped the list renderer only. The asset table, the fixed path set,
+    // and the content types must be the same two-artifact contract.
+    expect(Object.keys(STATIC_ASSETS).sort()).toEqual([...EXPECTED_PATHS].sort());
+    expect(STATIC_ASSETS["/assets/app.js"]?.contentType).toBe(JS_TYPE);
+    expect(STATIC_ASSETS["/assets/styles.css"]?.contentType).toBe(CSS_TYPE);
+    expect(STATIC_ASSETS["/"]?.contentType).toBe(HTML_TYPE);
+    expect(STATIC_ASSETS["/"]!.body).toBe(STATIC_ASSETS["/index.html"]!.body);
+
+    // The document still loads exactly one script and one stylesheet, and the
+    // bundle pair is still the only pair the page fetches.
+    const html = STATIC_ASSETS["/"]!.body;
+    const networkPaths = referencedPaths(html).filter((value) => !value.startsWith("data:"));
+    expect(networkPaths.sort()).toEqual(["/assets/app.js", "/assets/styles.css"]);
+    expect(html.match(/<script\b/g)?.length).toBe(1);
+    expect(html.match(/<link\b[^>]*rel="stylesheet"/g)?.length).toBe(1);
+  });
+
+  test("branding survives the list migration", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const html = STATIC_ASSETS["/"]!.body;
+
+    // The Phase B branding contract is unchanged by Phase D.
+    expect(js).toContain("Workboard");
+    expect(js).toContain("Workboard home");
+    expect(js).toContain("Primary navigation");
+    expect(js).toContain("Sign out");
+    expect(js).toContain("live-indicator");
+    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain('id="app"');
+
+    // And the Phase A placeholder shell is still absent.
+    for (const marker of PHASE_A_MARKERS) {
+      expect(js, marker).not.toContain(marker);
+    }
+  });
+
+  test("the typed list renders against a live server at the fixed asset paths", async () => {
+    // The markers above are asserted on the embedded table; this proves the same
+    // bytes reach a browser over the real route, under the same content type and
+    // cache policy, after the list migration.
+    const server = startWithStatic();
+    try {
+      const bundle = await fetch(`${server.url}/assets/app.js`);
+      expect(bundle.status).toBe(200);
+      expect(bundle.headers.get("content-type")).toBe(JS_TYPE);
+      expect(bundle.headers.get("cache-control")).toBe("no-cache");
+      const served = await bundle.text();
+      expect(served).toBe(STATIC_ASSETS["/assets/app.js"]!.body);
+      // The typed list's structure is in what the browser actually receives.
+      expect(served).toContain("list-table");
+      expect(served).toContain("Filter work items");
+      expect(served).toContain("Select work item #");
+      expect(served).not.toContain("updateSelectionBar");
+
+      // Every former list module URL stays a 404 rather than becoming a second,
+      // independently loadable copy of the list.
+      for (const path of ["/assets/list.js", "/assets/features/list.js", "/assets/features/list/index.js"]) {
+        const legacy = await fetch(`${server.url}${path}`);
+        expect(legacy.status, path).toBe(404);
+        expect(legacy.headers.get("content-type") ?? "", path).not.toContain("javascript");
+      }
+
+      // The stylesheet the typed list's class names resolve against is served from
+      // the same fixed path.
+      const styles = await fetch(`${server.url}/assets/styles.css`);
+      expect(styles.status).toBe(200);
+      expect(styles.headers.get("content-type")).toBe(CSS_TYPE);
+      const servedCss = await styles.text();
+      expect(servedCss).toContain("list-table");
+      expect(servedCss).toContain("list-toolbar");
+      expect(servedCss).toContain("selection-bar");
     } finally {
       server.stop();
     }
