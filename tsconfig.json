@@ -13,6 +13,8 @@
     "noImplicitOverride": true,
     "useUnknownInCatchVariables": true,
     "verbatimModuleSyntax": true,
+    "allowJs": true,
+    "checkJs": false,
     "skipLibCheck": true,
     "noEmit": true
   },

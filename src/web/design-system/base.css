@@ -1,0 +1,48 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: var(--wb-layout-min-width);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--wb-color-focus-outline);
+  outline-offset: 2px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.sr-only,
+.wb-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

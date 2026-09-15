@@ -6,7 +6,8 @@
 // Description history entries render as a collapsed git-style diff row that
 // expands on click.
 import * as api from "./api.js";
-import { el, toast, navigate, errorBanner } from "./app.js";
+import { el, toast, navigate, errorBanner } from "./legacy-bridge.js";
+import { publicErrorMessage, reportTerminalAuthError } from "./public-errors.js";
 import { createSerialQueue, resolveAssignableParticipant, tabIndexForKey } from "./ui-state.js";
 import { registerView } from "./views.js";
 
@@ -124,20 +125,21 @@ function diffCounts(ops) {
 
 // --- Detail view -------------------------------------------------------------
 
-async function mount(params, container) {
+function mount(params, container) {
   const id = Number(params.id);
   if (!Number.isInteger(id) || id <= 0) {
     container.replaceChildren(el("div", { class: "placeholder card" }, "Unknown item."));
-    return;
+    return { unmount() {} };
   }
 
+  let alive = true;
+  let reloadGeneration = 0;
   const state = { item: null, comments: [], history: [], participants: [] };
   // Participants and labels load before the controls are built, but each load
   // can legitimately come back empty (offline, revoked token): the assignee
   // control is then validated and reapplied rather than left showing a value
   // the API never agreed to.
-  state.participants = (await api.listParticipants().catch(() => ({ data: [] }))).data;
-  const allLabels = (await api.listLabels().catch(() => ({ data: [] }))).data;
+  const allLabels = [];
 
   const metaNode = el("div", { class: "detail-meta muted" });
   const commentsNode = el("div", { class: "detail-comments" });
@@ -185,13 +187,16 @@ async function mount(params, container) {
   }
 
   async function patch(input) {
+    if (!alive) return;
     try {
       await api.updateItem(id, input);
-      await reload();
-      toast("Saved");
+      if (!alive) return;
+      const reloaded = await reload();
+      if (alive && reloaded) toast("Saved");
     } catch (error) {
-      toast(`Save failed: ${error.message}`, true);
-      await reload();
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Save failed: ${publicErrorMessage(error)}`, true);
+      await reload().catch(() => undefined);
     }
   }
 
@@ -230,18 +235,21 @@ async function mount(params, container) {
   // Every label mutation PATCHes the whole set, so they are serialized and the
   // controls are disabled while one is in flight (see createSerialQueue).
   async function performApplyLabels({ names, message }) {
+    if (!alive) return;
     const next = [...new Set(names.map((name) => name.trim()).filter((name) => name !== ""))];
     await api.updateItem(id, { labels: next });
-    await reload();
-    toast(message);
+    if (!alive) return;
+    const reloaded = await reload();
+    if (alive && reloaded) toast(message);
   }
 
   // Failures are reported by the queue's onError, so one rejected PATCH both
   // surfaces to the user and leaves the queue usable for the next edit.
   const labelQueue = createSerialQueue(performApplyLabels, {
     onError: (error) => {
-      toast(`Label change failed: ${error.message}`, true);
-      void reload();
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Label change failed: ${publicErrorMessage(error)}`, true);
+      void reload().catch(() => undefined);
     },
   });
 
@@ -251,10 +259,11 @@ async function mount(params, container) {
    * can never come back and resurrect labels the user just removed.
    */
   function applyLabels(names, message) {
+    if (!alive) return Promise.resolve();
     const desired = [...new Set(names.map((name) => name.trim()).filter((name) => name !== ""))];
     setLabelControlsBusy(true);
     return labelQueue.schedule({ names: desired, message }).finally(() => {
-      setLabelControlsBusy(labelQueue.isBusy());
+      if (alive) setLabelControlsBusy(labelQueue.isBusy());
     });
   }
 
@@ -267,6 +276,7 @@ async function mount(params, container) {
 
   /** Attach a label typed by hand, creating it first if it does not exist yet. */
   async function addTypedLabel(name) {
+    if (!alive) return;
     const names = itemLabelNames();
     if (names.includes(name)) {
       toast(`Already labelled ${name}`);
@@ -276,11 +286,13 @@ async function mount(params, container) {
       const color = NEW_LABEL_COLORS[knownLabels.length % NEW_LABEL_COLORS.length];
       try {
         await api.createLabel({ name, color });
+        if (!alive) return;
         rememberLabel(name);
       } catch (error) {
         // 409 means it already exists (e.g. created in another tab): attach it.
+        if (!alive || reportTerminalAuthError(error)) return;
         if (!(error instanceof api.ApiError) || error.status !== 409) {
-          toast(`Could not create label: ${error.message}`, true);
+          toast(`Could not create label: ${publicErrorMessage(error)}`, true);
           return;
         }
         rememberLabel(name);
@@ -357,10 +369,11 @@ async function mount(params, container) {
   let titleTimer = null;
 
   function setTitleStatus(text) {
-    titleState.textContent = text;
+    if (alive) titleState.textContent = text;
   }
 
   async function saveTitleNow() {
+    if (!alive) return;
     if (titleSaving) {
       titleQueued = true; // another change is waiting; run again after this one
       return;
@@ -379,26 +392,32 @@ async function mount(params, container) {
     setTitleStatus("Saving…");
     try {
       await api.updateItem(id, { title: value });
+      if (!alive) return;
       lastSavedTitle = value;
       if (state.item !== null) state.item.title = value;
       setTitleStatus("Saved ✓");
     } catch (error) {
-      toast(`Save failed: ${error.message}`, true);
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Save failed: ${publicErrorMessage(error)}`, true);
       titleInput.value = state.item?.title ?? titleInput.value;
       lastSavedTitle = state.item?.title ?? "";
       setTitleStatus("Not saved");
     } finally {
       titleSaving = false;
     }
-    if (titleQueued) {
+    if (alive && titleQueued) {
       titleQueued = false;
-      saveTitleNow();
+      void saveTitleNow();
     }
   }
 
   function scheduleTitleSave() {
+    if (!alive) return;
     clearTimeout(titleTimer);
-    titleTimer = setTimeout(() => saveTitleNow(), TITLE_DEBOUNCE_MS);
+    titleTimer = setTimeout(() => {
+      titleTimer = null;
+      if (alive) void saveTitleNow();
+    }, TITLE_DEBOUNCE_MS);
   }
 
   titleInput.addEventListener("input", () => {
@@ -440,10 +459,11 @@ async function mount(params, container) {
   let bodyInputPopulated = false;
 
   function setBodyStatus(text) {
-    bodyState.textContent = text;
+    if (alive) bodyState.textContent = text;
   }
 
   async function saveBodyNow() {
+    if (!alive) return;
     if (bodySaving) {
       bodyQueued = true;
       return;
@@ -457,26 +477,32 @@ async function mount(params, container) {
     setBodyStatus("Saving…");
     try {
       await api.updateItem(id, { body: value });
+      if (!alive) return;
       savedBody = value;
       if (state.item !== null) state.item.body = value;
       setBodyStatus("Saved ✓");
     } catch (error) {
-      toast(`Save failed: ${error.message}`, true);
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Save failed: ${publicErrorMessage(error)}`, true);
       savedBody = state.item?.body ?? "";
       bodyInput.value = savedBody;
       setBodyStatus("Not saved");
     } finally {
       bodySaving = false;
     }
-    if (bodyQueued) {
+    if (alive && bodyQueued) {
       bodyQueued = false;
-      saveBodyNow();
+      void saveBodyNow();
     }
   }
 
   function scheduleBodySave() {
+    if (!alive) return;
     clearTimeout(bodyTimer);
-    bodyTimer = setTimeout(() => saveBodyNow(), BODY_DEBOUNCE_MS);
+    bodyTimer = setTimeout(() => {
+      bodyTimer = null;
+      if (alive) void saveBodyNow();
+    }, BODY_DEBOUNCE_MS);
   }
 
   bodyInput.addEventListener("input", () => {
@@ -776,20 +802,23 @@ async function mount(params, container) {
 
   const submitButton = el("button", { class: "primary" }, "Comment");
   async function submitComment() {
+    if (!alive) return;
     const body = textarea.value.trim();
     if (!body) return;
     submitButton.disabled = true;
     try {
       const result = await api.addComment(id, body);
+      if (!alive) return;
       textarea.value = "";
       closeMentions();
       const mentioned = result.data.mentionedParticipants.map((participant) => `@${participant.name}`).join(", ");
       toast(mentioned ? `Comment added; notified ${mentioned}` : "Comment added");
       await reload();
     } catch (error) {
-      toast(`Comment failed: ${error.message}`, true);
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Comment failed: ${publicErrorMessage(error)}`, true);
     } finally {
-      submitButton.disabled = false;
+      if (alive) submitButton.disabled = false;
     }
   }
   submitButton.addEventListener("click", submitComment);
@@ -807,20 +836,26 @@ async function mount(params, container) {
 
   const deleteButton = el("button", { class: "danger" }, "Delete item");
   deleteButton.addEventListener("click", async () => {
-    if (!window.confirm(`Delete item #${id}? This cannot be undone.`)) return;
+    if (!alive || !window.confirm(`Delete item #${id}? This cannot be undone.`)) return;
     if (document.activeElement === titleInput && titleInput.value.trim() !== lastSavedTitle) await saveTitleNow();
+    if (!alive) return;
     try {
       await api.deleteItem(id);
+      if (!alive) return;
       toast("Item deleted");
       navigate("#/board");
     } catch (error) {
-      toast(`Delete failed: ${error.message}`, true);
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Delete failed: ${publicErrorMessage(error)}`, true);
     }
   });
 
   async function reload() {
+    if (!alive) return false;
+    const generation = ++reloadGeneration;
     try {
       const detail = await api.getItem(id);
+      if (!alive || generation !== reloadGeneration) return false;
       state.item = detail.data.item;
       state.comments = detail.data.comments;
       state.history = detail.data.history;
@@ -829,14 +864,19 @@ async function mount(params, container) {
       // roster *before* rendering so the control can actually represent the
       // item's assignee instead of falling back to "Unassigned".
       if (state.item?.assignee && !state.participants.some((p) => String(p.id) === String(state.item.assignee.id))) {
-        const participants = await api.listParticipants().catch(() => null);
-        if (participants !== null) {
-          state.participants = participants.data;
-          renderAssigneeOptions(); // rebuilds options, then reapplies the value
-        }
+        const participants = await api.listParticipants();
+        if (!alive || generation !== reloadGeneration) return false;
+        state.participants = participants.data;
+        renderAssigneeOptions(); // rebuilds options, then reapplies the value
       }
-      renderDetail();
+      if (alive && generation === reloadGeneration) {
+        renderDetail();
+        return true;
+      }
+      return false;
     } catch (error) {
+      if (!alive || generation !== reloadGeneration) return false;
+      if (reportTerminalAuthError(error)) return false;
       container.replaceChildren(errorBanner(error));
       throw error;
     }
@@ -864,11 +904,36 @@ async function mount(params, container) {
     ),
   );
 
-  try {
-    await reload();
-  } catch {
-    // reload() already rendered the error banner.
-  }
+  void (async () => {
+    const [participants, labels] = await Promise.allSettled([api.listParticipants(), api.listLabels()]);
+    if (!alive) return;
+    if (participants.status === "rejected" && reportTerminalAuthError(participants.reason)) return;
+    if (labels.status === "rejected" && reportTerminalAuthError(labels.reason)) return;
+    if (participants.status === "fulfilled") state.participants = participants.value.data;
+    if (labels.status === "fulfilled") knownLabels.push(...labels.value.data);
+    renderAssigneeOptions();
+    try {
+      await reload();
+    } catch {
+      // reload() already rendered public-safe error copy.
+    }
+  })();
+
+  let unmounted = false;
+  return {
+    unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      alive = false;
+      reloadGeneration += 1;
+      clearTimeout(titleTimer);
+      clearTimeout(bodyTimer);
+      titleTimer = null;
+      bodyTimer = null;
+      titleQueued = false;
+      bodyQueued = false;
+    },
+  };
 }
 
 registerView("detail", { title: "Item", href: "#/item", hidden: true, mount });

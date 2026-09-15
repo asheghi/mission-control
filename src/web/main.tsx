@@ -1,9 +1,12 @@
 import { render } from "preact";
 import "./styles.css";
-import "./app.js";
+import "./board.js";
+import "./list.js";
+import "./detail.js";
+import { App } from "./app";
 
-const markerHost = document.getElementById("preact-marker");
+const app = document.getElementById("app");
 
-if (markerHost !== null) {
-  render(<span data-preact-marker="phase-a">Preact browser build active</span>, markerHost);
-}
+if (app === null) throw new Error("Workboard application host is missing");
+
+render(<App />, app);

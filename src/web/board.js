@@ -1,7 +1,8 @@
 // Board view (Task 13): one column per status, drag & drop plus keyboard
 // moves, optimistic status updates with rollback, per-column quick add.
 import * as api from "./api.js";
-import { el, toast, errorBanner, navigate } from "./app.js";
+import { el, toast, errorBanner, navigate } from "./legacy-bridge.js";
+import { publicErrorMessage, reportTerminalAuthError } from "./public-errors.js";
 import { cardMeta } from "./ui-state.js";
 import { registerView } from "./views.js";
 
@@ -90,7 +91,7 @@ function cardNode(item, options) {
   return card;
 }
 
-function quickAddForm(status, onCreated) {
+function quickAddForm(status, onCreated, isAlive) {
   const input = el("input", { type: "text", placeholder: "Add item…", "aria-label": `Add item to ${COLUMN_LABELS[status]}` });
   const busy = { value: false };
   return el(
@@ -100,17 +101,20 @@ function quickAddForm(status, onCreated) {
       onsubmit: async (event) => {
         event.preventDefault();
         const title = input.value.trim();
-        if (!title || busy.value) return;
+        if (!title || busy.value || !isAlive()) return;
         busy.value = true;
         try {
           const created = await api.createItem({ title });
+          if (!isAlive()) return;
           if (status !== "todo") await api.updateItem(created.data.item.id, { status });
+          if (!isAlive()) return;
           input.value = "";
-          onCreated();
+          void onCreated();
         } catch (error) {
-          toast(`Could not add item: ${error.message}`, true);
+          if (!isAlive() || reportTerminalAuthError(error)) return;
+          toast(`Could not add item: ${publicErrorMessage(error)}`, true);
         } finally {
-          busy.value = false;
+          if (isAlive()) busy.value = false;
         }
       },
     },
@@ -118,8 +122,11 @@ function quickAddForm(status, onCreated) {
   );
 }
 
-async function mount(params, container) {
+function mount(params, container) {
   const state = { items: [], participants: [] };
+  let alive = true;
+  let refreshGeneration = 0;
+  const isAlive = () => alive;
 
   const columns = new Map();
   const board = el(
@@ -132,7 +139,7 @@ async function mount(params, container) {
         { class: "board-column", "data-status": status },
         el("h2", { class: "board-column-title" }, COLUMN_LABELS[status], el("span", { class: "count", "data-count": "" })),
         cards,
-        quickAddForm(status, refresh),
+        quickAddForm(status, refresh, isAlive),
       );
       columns.set(status, { column, cards });
       return column;
@@ -140,6 +147,7 @@ async function mount(params, container) {
   );
 
   function renderCards() {
+    if (!alive) return;
     for (const status of STATUSES) {
       const { cards, column } = columns.get(status);
       const items = state.items.filter((item) => item.status === status);
@@ -151,6 +159,7 @@ async function mount(params, container) {
   }
 
   async function changeStatus(item, status, options = { optimistic: true }) {
+    if (!alive) return false;
     const previous = item.status;
     const apply = () => {
       item.status = status;
@@ -165,17 +174,22 @@ async function mount(params, container) {
     if (options.optimistic) apply();
     try {
       await api.updateItem(item.id, { status });
+      if (!alive) return false;
       if (options.optimistic) await refresh(); // reconcile with the server view
-      return true;
+      return alive;
     } catch (error) {
+      if (!alive || reportTerminalAuthError(error)) return false;
       if (options.optimistic) revert();
-      toast(`Move failed: ${error.message}`, true);
+      toast(`Move failed: ${publicErrorMessage(error)}`, true);
       return false;
     }
   }
 
   async function refresh() {
+    if (!alive) return;
+    const generation = ++refreshGeneration;
     const result = await api.listItems({ limit: 100 });
+    if (!alive || generation !== refreshGeneration) return;
     state.items = result.data;
     renderCards();
   }
@@ -209,11 +223,20 @@ async function mount(params, container) {
     ),
     board,
   );
-  try {
-    await refresh();
-  } catch (error) {
+  void refresh().catch((error) => {
+    if (!alive || reportTerminalAuthError(error)) return;
     container.replaceChildren(errorBanner(error));
-  }
+  });
+
+  let unmounted = false;
+  return {
+    unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      alive = false;
+      refreshGeneration += 1;
+    },
+  };
 }
 
 registerView("board", { title: "Board", href: "#/board", mount });

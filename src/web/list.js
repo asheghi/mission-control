@@ -3,7 +3,8 @@
 // view is shareable, survives reload, and local storage keeps the last set
 // when the URL carries no query.
 import * as api from "./api.js";
-import { el, toast, navigate } from "./app.js";
+import { el, toast, navigate } from "./legacy-bridge.js";
+import { publicErrorMessage, reportTerminalAuthError } from "./public-errors.js";
 import { createDebounced, createFilterStore, hasActiveFilters } from "./ui-state.js";
 import { registerView } from "./views.js";
 
@@ -11,7 +12,7 @@ const STATUSES = ["todo", "doing", "blocked", "done"];
 const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 250;
 
-async function mount(params, container) {
+function mount(params, container) {
   const state = {
     items: [],
     nextCursor: null,
@@ -25,6 +26,7 @@ async function mount(params, container) {
   // whose view was replaced (route change, refresh, sign-out) must not rewrite
   // another route's hash or fetch pages nobody will ever see.
   let alive = true;
+  let fetchGeneration = 0;
 
   // Restore from the URL hash first, then local storage, then empty.
   const filterStore = createFilterStore();
@@ -129,9 +131,13 @@ async function mount(params, container) {
   }
 
   async function bulkAssign(participantId) {
+    if (!alive) return;
     const ids = [...state.selected];
     const results = await Promise.allSettled(ids.map((id) => api.updateItem(id, { assigneeId: participantId })));
-    const failed = results.filter((r) => r.status === "rejected").length;
+    if (!alive) return;
+    const terminal = results.find((result) => result.status === "rejected" && reportTerminalAuthError(result.reason));
+    if (terminal) return;
+    const failed = results.filter((result) => result.status === "rejected").length;
     if (failed > 0) toast(`${failed} of ${ids.length} updates failed`, true);
     else toast(`Updated ${ids.length} item(s)`);
     clearSelection();
@@ -181,6 +187,8 @@ async function mount(params, container) {
   }
 
   async function fetchPage({ reset }) {
+    if (!alive) return false;
+    const generation = ++fetchGeneration;
     const params = { limit: PAGE_SIZE };
     if (!reset && state.nextCursor) params.cursor = state.nextCursor;
     if (state.filters.status) params.status = state.filters.status;
@@ -188,21 +196,22 @@ async function mount(params, container) {
     if (state.filters.label) params.label = state.filters.label;
     if (state.filters.q) params.q = state.filters.q;
     const result = await api.listItems(params);
-    if (!alive) return;
+    if (!alive || generation !== fetchGeneration) return false;
     state.items = reset ? result.data : [...state.items, ...result.data];
     state.nextCursor = result.meta.nextCursor;
+    return true;
   }
 
   async function refresh({ reset = true } = {}) {
     if (!alive) return;
     try {
-      await fetchPage({ reset });
-      if (!alive) return; // the view was replaced while the page was in flight
+      const current = await fetchPage({ reset });
+      if (!alive || !current) return; // the view was replaced or a newer request won
       if (reset) clearSelection();
       renderRows();
     } catch (error) {
-      if (!alive) return;
-      toast(`Could not load items: ${error.message}`, true);
+      if (!alive || reportTerminalAuthError(error)) return;
+      toast(`Could not load items: ${publicErrorMessage(error)}`, true);
     }
   }
 
@@ -298,43 +307,42 @@ async function mount(params, container) {
 
   container.replaceChildren(view);
 
-  // Unmount hook: cancel pending search work and reject late writes, so a
-  // keystroke typed just before a route change can never fire afterwards and
-  // rewrite the *new* route's hash. The router calls this before it swaps the
-  // view out; it is idempotent and safe to call after the view is gone.
-  view.unmount = () => {
+  // Load reference data for filters, then the first page without delaying the
+  // lifecycle handle returned to the shell.
+  void (async () => {
+    const [participants, labels] = await Promise.allSettled([api.listParticipants(), api.listLabels()]);
     if (!alive) return;
-    alive = false;
-    searchDebounce.cancel();
-  };
-
-  // Load reference data for filters, then the first page.
-  try {
-    const [participants, labels] = await Promise.all([api.listParticipants(), api.listLabels()]);
-    if (!alive) return;
-    state.participants = participants.data;
-    state.labels = labels.data;
+    if (participants.status === "rejected" && reportTerminalAuthError(participants.reason)) return;
+    if (labels.status === "rejected" && reportTerminalAuthError(labels.reason)) return;
+    if (participants.status === "fulfilled") state.participants = participants.value.data;
+    if (labels.status === "fulfilled") state.labels = labels.value.data;
+    if (participants.status === "rejected" || labels.status === "rejected") {
+      const error = participants.status === "rejected" ? participants.reason : labels.reason;
+      toast(`Could not load filters: ${publicErrorMessage(error)}`, true);
+    }
     for (const participant of state.participants) {
       assigneeSelect.append(el("option", { value: String(participant.id) }, participant.name));
     }
     for (const label of state.labels) {
       labelSelect.append(el("option", { value: label.name }, label.name));
     }
-    // A label restored from the URL may not exist any more; fall back to "any"
-    // rather than leaving the select stuck on a missing option.
     reapplyLabelFilter();
-    // Assignee filter options load asynchronously: reapply the restored value
-    // once they exist, otherwise a deep link such as #/list?assignee=7 renders
-    // the "Any assignee" placeholder while the list is actually filtered.
     reapplyAssigneeFilter();
-  } catch (error) {
     if (!alive) return;
-    toast(`Could not load filters: ${error.message}`, true);
-  }
-  syncClearButton();
-  await refresh({ reset: true });
-  // Returning the node lets the router track and later unmount this view.
-  return view;
+    syncClearButton();
+    await refresh({ reset: true });
+  })();
+
+  let unmounted = false;
+  return {
+    unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      alive = false;
+      fetchGeneration += 1;
+      searchDebounce.cancel();
+    },
+  };
 }
 
 registerView("list", { title: "List", href: "#/list", mount });
