@@ -2,7 +2,7 @@
 // token contract.
 //
 // The public surface is unchanged from Phase A: `scripts/build-web.ts` bundles
-// `src/web/main.tsx` (Preact plus the legacy board/list/detail feature modules)
+// `src/web/main.tsx` (Preact plus the typed board, list, and detail features)
 // into exactly two artifacts, and `src/web/static-assets.ts` is the single asset
 // table the server embeds. This suite imports that same table rather than
 // restating it, so a path that exists only in the source tree can never look
@@ -214,6 +214,113 @@ const LEGACY_LIST_SIGNATURES = [
   // Its visible strings, distinct from the typed list's.
   "Assign to…",
   "Select #",
+] as const;
+
+// -----------------------------------------------------------------------------
+// Phase E — the typed detail
+//
+// Phase E moves detail rendering out of the legacy `src/web/detail.js` module
+// and into `src/web/features/detail/*`, registered through the same view
+// registry as a Preact component. As with the board and the list, the bundle is
+// minified, so nothing below may depend on a minified identifier, a formatting
+// choice, or a helper's internal variable name. Every marker is either a literal
+// that survives minification — a class name, an ARIA attribute, a visible string
+// — or a DOM API the detail view must call.
+// -----------------------------------------------------------------------------
+
+// Product markers of the typed detail view: the header and its editable title,
+// the field controls, the label editor, the description tabs, the comment
+// composer with its mention listbox, the comment list, and the history card.
+const TYPED_DETAIL_MARKERS = [
+  "detail-title-input",
+  "detail-controls",
+  "detail-labels",
+  "detail-body",
+  "detail-comments",
+  "detail-history",
+  "comment-head",
+  "mention-list",
+  "mention-option",
+  "diff-stat",
+  "label-suggestion",
+] as const;
+
+// The accessible names and roles the typed detail view carries. These are the
+// user-visible strings, so they are contract rather than implementation: both
+// the tab labels and the failure copy ship as literals because a Preact bundle
+// contains no HTML source text.
+const TYPED_DETAIL_LABEL_MARKERS = [
+  "Work item #",
+  "Back to board",
+  "Description view",
+  "Preview",
+  "Edit",
+  "Mention suggestions",
+  "Add a comment",
+  "No comments yet.",
+  "No history yet.",
+  "No labels",
+  "Add label…",
+  "Delete item",
+  "description changed",
+] as const;
+
+// The failure states the typed detail hook publishes. They survive minification
+// and are the strings a user actually sees, so a silent blank page is a
+// regression this catches.
+const TYPED_DETAIL_ERROR_MARKERS = [
+  "Could not load this item. Please try again.",
+  "Your change could not be saved. Please try again.",
+  "The item could not be deleted. Please try again.",
+  "Your latest edits could not be saved, so the item was not deleted.",
+  "Label changes could not be saved. Please try again.",
+  "Your comment could not be posted. Please try again.",
+  "Title cannot be empty.",
+  "Title must be 256 characters or fewer.",
+  "Description must be 100,000 characters or fewer.",
+  // The label bound is assembled at runtime from the shared constant, so the
+  // minifier keeps the two halves of the sentence as separate literals.
+  "An item can have at most ",
+] as const;
+
+// The typed detail view is built from native controls and real Preact slots.
+// These are asserted as element-type strings, since a Preact bundle holds no
+// `<input` tag text.
+const TYPED_DETAIL_CONTROL_MARKERS = [
+  '"input"',
+  '"textarea"',
+  '"select"',
+  '"datalist"',
+  '"option"',
+  "onInput",
+  "onChange",
+  "onKeyDown",
+  "maxLength",
+  "autoComplete",
+] as const;
+
+// Signatures of the legacy `src/web/detail.js` module that the typed component
+// replaced. These are source-level names and calls, so a minifier leaves them
+// alone — which is exactly why their presence would mean the legacy module is
+// still in the graph, re-registering the `detail` view as a legacy `mount` and
+// building a second copy of the same controls with imperative listeners.
+const LEGACY_DETAIL_SIGNATURES = [
+  "safeUrl",
+  "renderInline",
+  "renderMarkdown",
+  "formatTime",
+  "lcsOps",
+  "diffCounts",
+  "applyAssigneeSelection",
+  "renderAssigneeOptions",
+  "renderLabels",
+  "scheduleTitleSave",
+  "renderComments",
+  "renderHistory",
+  "renderHistoryEntry",
+  // Its serial-queue helper and inline markdown scanner, which only it imported.
+  "resolveAssignableParticipant",
+  "tabIndexForKey",
 ] as const;
 
 // Third-party origins that must never appear in a served asset. A CDN script,
@@ -1055,10 +1162,11 @@ describe("typed list bundle (Phase D)", () => {
     for (const signature of LEGACY_LIST_SIGNATURES) {
       expect(contains(js, signature), `legacy list signature present: ${signature}`).toBe(false);
     }
-    // Detail is still the one legacy view that ships; its `mount` registration
-    // must remain, which proves the check above is testing for the *list*
-    // signature rather than for `mount` existing at all.
-    expect(js).toContain('{title:"Item",href:"#/item"');
+    // Detail is no longer the one legacy view: Phase E migrated it to a Preact
+    // component, so the legacy `mount` path has no remaining registrant. That
+    // absence is exactly what the check above is testing for, now that the last
+    // legacy view is gone.
+    expect(js).not.toContain("mount:");
 
     // No former module URL serves a second, independently loadable copy of the
     // list — neither the legacy source module nor a pre-bundle feature module.
@@ -1086,12 +1194,12 @@ describe("typed list bundle (Phase D)", () => {
       expect(contains(js, signature), `legacy board signature present: ${signature}`).toBe(false);
     }
 
-    // Detail is still the one legacy view, registered with `mount`, and still
-    // reachable from both migrated views through the same `#/item/` route.
-    expect(js).toContain('mount:');
-    expect(js).toContain('title:"Item",href:"#/item"');
-    expect(js).toContain("hidden:!0");
+    // Board, list, and detail are registered side by side with the same
+    // component shape, and detail stays reachable from both migrated views
+    // through the same `#/item/` route.
+    expect(js).toContain('{kind:"component",title:"Item",href:"#/item",hidden:!0,component:');
     expect(js).toContain("#/item/");
+    expect(js).toContain("hidden:!0");
     expect(css).toContain(".board-card");
     expect(css).toContain(".list-table");
   });
@@ -1189,6 +1297,301 @@ describe("typed list bundle (Phase D)", () => {
       expect(servedCss).toContain("list-table");
       expect(servedCss).toContain("list-toolbar");
       expect(servedCss).toContain("selection-bar");
+    } finally {
+      server.stop();
+    }
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase E — the typed detail
+//
+// Phase E is a replacement, not an addition: `src/web/features/detail/*` renders
+// the detail view as a Preact component registered as `kind: "component"`, and
+// the legacy `src/web/detail.js` module is no longer part of the UI. With it, the
+// last `mount` registrant is gone and the bundle has no legacy view left. The two
+// failure modes are the same ones Phase C and Phase D guarded, and neither is
+// visible to a unit test:
+//
+//   1. The replacement silently does not ship — the bundle is built from a
+//      different entrypoint, or a stale asset table is embedded — so `#/item/:id`
+//      renders nothing and no build error is raised.
+//   2. The legacy module ships *alongside* the new component, re-registering the
+//      `detail` view with a `mount` and restoring a second set of imperative
+//      title, label, comment, and history handlers.
+//
+// The Board and List contracts must survive the migration unchanged, so those are
+// re-asserted here rather than assumed from the Phase C and D blocks.
+// -----------------------------------------------------------------------------
+describe("typed detail bundle (Phase E)", () => {
+  test("the served bundle carries the typed detail view's markers", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // The header, controls, label editor, tabs, composer, comments, and history
+    // the components render.
+    for (const marker of TYPED_DETAIL_MARKERS) {
+      expect(contains(js, marker), `typed detail marker missing: ${marker}`).toBe(true);
+    }
+    // The loading, refreshing, empty, and not-found states survive the migration,
+    // so a slow or missing item is never a blank page.
+    expect(js).toContain("Loading item…");
+    expect(js).toContain("Refreshing item…");
+    expect(js).toContain("Item not found");
+    expect(js).toContain("Retry");
+  });
+
+  test("the typed detail view's accessible names and states ship", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    for (const marker of TYPED_DETAIL_LABEL_MARKERS) {
+      expect(contains(js, marker), `accessible-name marker missing: ${marker}`).toBe(true);
+    }
+    // The view announces its own state through one polite live region and its
+    // failures through an assertive alert, and the mention combobox exposes the
+    // full ARIA combobox contract rather than a plain textarea.
+    expect(js).toContain("aria-live");
+    expect(js).toContain("aria-atomic");
+    expect(js).toContain("combobox");
+    expect(js).toContain("aria-autocomplete");
+    expect(js).toContain("aria-activedescendant");
+    expect(js).toContain("aria-expanded");
+    // The description tabs are a real tablist whose panels are labelled by them.
+    expect(js).toContain("tablist");
+    expect(js).toContain("tabpanel");
+    expect(js).toContain("aria-selected");
+    // Every failure the hook can publish is a literal in the bundle, so the user
+    // never sees a stale or empty view with no explanation.
+    for (const marker of TYPED_DETAIL_ERROR_MARKERS) {
+      expect(contains(js, marker), `detail error marker missing: ${marker}`).toBe(true);
+    }
+    // No raw server or JavaScript error text may reach the user: the messages
+    // above, plus the generic API-error copy, are the whole set the view can
+    // display. (`TypeError` itself does appear in the bundle as the type thrown
+    // by a programming-error guard, which is not user-facing text.)
+    expect(js).not.toContain("[object Object]");
+    expect(js).not.toContain("Failed to fetch");
+    expect(js).not.toContain("SyntaxError");
+    expect(js).not.toContain("is not a function");
+  });
+
+  test("the detail view is built from native controls and server-mirrored limits", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    for (const marker of TYPED_DETAIL_CONTROL_MARKERS) {
+      expect(contains(js, marker), `detail control marker missing: ${marker}`).toBe(true);
+    }
+    // The title and description inputs carry the server's own bounds, so a
+    // too-long value is refused before it can become a 400.
+    expect(js).toContain("256");
+    expect(js).toContain("1e5");
+    expect(js).toContain("64");
+    expect(js).toContain("20");
+    // The label input is offered the catalogue through a native datalist, and
+    // the mention listbox is keyed by the participant id the server sent.
+    expect(js).toContain("datalist");
+    expect(js).toContain("listbox");
+    expect(js).toContain("#/board");
+
+    // The detail view's class names resolve against the one served stylesheet.
+    for (const selector of [
+      "detail-title-input",
+      "detail-controls",
+      "detail-labels",
+      "detail-body",
+      "detail-comments",
+      "detail-history",
+      "mention-list",
+      "mention-option",
+      "diff-box",
+    ]) {
+      expect(contains(css, selector), `detail selector missing from stylesheet: ${selector}`).toBe(true);
+    }
+  });
+
+  test("the detail view is registered as a Preact component, not a legacy mount", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // `features/detail/index.ts` registers `{ kind: "component", component }`.
+    // The strings survive minification; the object shape is unit-tested at the
+    // source level, so this asserts the component path is the one bundled. Board,
+    // list, and detail now sit side by side with identical registration shapes.
+    expect(js).toContain('{kind:"component",title:"Item",href:"#/item",hidden:!0,component:');
+    expect(js).toContain('{kind:"component",title:"List",href:"#/list",component:');
+    expect(js).toContain('{kind:"component",title:"Board",href:"#/board",component:');
+    // The hidden detail route stays reachable from both migrated views.
+    expect(js).toContain("#/item/");
+    // Exactly one registration of the detail route: a second one would mean two
+    // `detail` view definitions competing for the same hash route. The route
+    // prefix itself appears once per view that links to an item — both migrated
+    // views do — plus the registration, so it is counted rather than assumed.
+    expect(occurrences(js, 'title:"Item",href:"#/item"')).toBe(1);
+    expect(occurrences(js, "#/item/")).toBeGreaterThanOrEqual(2);
+  });
+
+  test("the legacy detail module is not bundled, and no legacy mount remains", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // Source-level names and calls from `src/web/detail.js`. A minifier leaves
+    // these alone, so their presence would mean the legacy module is still in the
+    // graph — and with it a second `detail` view registration and a second set of
+    // imperative title, label, comment, and history handlers.
+    for (const signature of LEGACY_DETAIL_SIGNATURES) {
+      expect(contains(js, signature), `legacy detail signature present: ${signature}`).toBe(false);
+    }
+    // With detail migrated, no view definition carries a `mount` any more: the
+    // registry's legacy path has no remaining registrant.
+    expect(js).not.toContain("mount:");
+    // The two class names the legacy module shared with the typed view are kept
+    // on purpose — the stylesheet and both suites still target them — so their
+    // presence is not a legacy-module signal.
+    expect(js).toContain('class:"detail-title-input"');
+
+    // No former module URL serves a second, independently loadable copy of the
+    // detail view — neither the legacy source module nor a pre-bundle feature
+    // module.
+    for (const path of [
+      "/assets/detail.js",
+      "/assets/features/detail.js",
+      "/assets/features/detail/index.js",
+      "/assets/features/detail/DetailView.js",
+      "/assets/features/detail/data.js",
+      "/assets/features/detail/components.js",
+    ]) {
+      expect(STATIC_ASSETS[path], `detail module URL is served: ${path}`).toBeUndefined();
+    }
+  });
+
+  test("the Bundle and List contracts survive the detail migration", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    // The typed board is unchanged by Phase E.
+    for (const marker of TYPED_BOARD_MARKERS) {
+      expect(contains(js, marker), `typed board marker missing: ${marker}`).toBe(true);
+    }
+    expect(js).toContain("Move #");
+    expect(js).toContain("Add item to");
+    for (const signature of LEGACY_BOARD_SIGNATURES) {
+      expect(contains(js, signature), `legacy board signature present: ${signature}`).toBe(false);
+    }
+
+    // The typed list is unchanged by Phase E.
+    for (const marker of TYPED_LIST_MARKERS) {
+      expect(contains(js, marker), `typed list marker missing: ${marker}`).toBe(true);
+    }
+    for (const marker of TYPED_LIST_LABEL_MARKERS) {
+      expect(contains(js, marker), `typed list label missing: ${marker}`).toBe(true);
+    }
+    for (const signature of LEGACY_LIST_SIGNATURES) {
+      expect(contains(js, signature), `legacy list signature present: ${signature}`).toBe(false);
+    }
+    // The detail route the board's card and the list's row both link through is
+    // still the same anchor target.
+    expect(occurrences(js, "#/item/")).toBeGreaterThanOrEqual(2);
+    expect(css).toContain(".board-card");
+    expect(css).toContain(".list-table");
+  });
+
+  test("no router, state library, or third-party asset is bundled", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    // The Phase C/D exclusions still hold after Phase E: one hash-based shell owns
+    // routing and every view's state lives in Preact hooks rather than a store.
+    for (const signature of DISALLOWED_LIBRARY_SIGNATURES) {
+      expect(contains(js, signature), `disallowed library present: ${signature}`).toBe(false);
+    }
+    expect(js).not.toContain("react-dom");
+    expect(js).not.toContain("ReactDOM");
+    for (const host of THIRD_PARTY_HOSTS) {
+      expect(contains(js, host), `third-party host in JavaScript: ${host}`).toBe(false);
+      expect(contains(css, host), `third-party host in stylesheet: ${host}`).toBe(false);
+    }
+    // Still exactly one event-feed owner and one transport after the migration.
+    expect(occurrences(js, "api/events")).toBe(1);
+    expect(js).not.toContain("EventSource");
+    expect(js).not.toContain("WebSocket");
+  });
+
+  test("the public asset contract is unchanged by the detail migration", () => {
+    // Phase E swapped the detail renderer only. The asset table, the fixed path
+    // set, and the content types must be the same two-artifact contract: exactly
+    // one JavaScript bundle and one stylesheet.
+    expect(Object.keys(STATIC_ASSETS).sort()).toEqual([...EXPECTED_PATHS].sort());
+    expect(STATIC_ASSETS["/assets/app.js"]?.contentType).toBe(JS_TYPE);
+    expect(STATIC_ASSETS["/assets/styles.css"]?.contentType).toBe(CSS_TYPE);
+    expect(STATIC_ASSETS["/"]?.contentType).toBe(HTML_TYPE);
+    expect(STATIC_ASSETS["/"]!.body).toBe(STATIC_ASSETS["/index.html"]!.body);
+
+    // The document still loads exactly one script and one stylesheet, and the
+    // bundle pair is still the only pair the page fetches.
+    const html = STATIC_ASSETS["/"]!.body;
+    const networkPaths = referencedPaths(html).filter((value) => !value.startsWith("data:"));
+    expect(networkPaths.sort()).toEqual(["/assets/app.js", "/assets/styles.css"]);
+    expect(html.match(/<script\b/g)?.length).toBe(1);
+    expect(html.match(/<link\b[^>]*rel="stylesheet"/g)?.length).toBe(1);
+    // One concatenated stylesheet: the detail styles are compiled into it rather
+    // than fetched as a second file.
+    expect(STATIC_ASSETS["/assets/styles.css"]!.body).not.toContain("@import");
+  });
+
+  test("branding survives the detail migration", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const html = STATIC_ASSETS["/"]!.body;
+
+    // The Phase B branding contract is unchanged by Phase E.
+    expect(js).toContain("Workboard");
+    expect(js).toContain("Workboard home");
+    expect(js).toContain("Primary navigation");
+    expect(js).toContain("Sign out");
+    expect(js).toContain("live-indicator");
+    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain('id="app"');
+
+    // And the Phase A placeholder shell is still absent.
+    for (const marker of PHASE_A_MARKERS) {
+      expect(js, marker).not.toContain(marker);
+    }
+  });
+
+  test("the typed detail view renders against a live server at the fixed asset paths", async () => {
+    // The markers above are asserted on the embedded table; this proves the same
+    // bytes reach a browser over the real route, under the same content type and
+    // cache policy, after the detail migration.
+    const server = startWithStatic();
+    try {
+      const bundle = await fetch(`${server.url}/assets/app.js`);
+      expect(bundle.status).toBe(200);
+      expect(bundle.headers.get("content-type")).toBe(JS_TYPE);
+      expect(bundle.headers.get("cache-control")).toBe("no-cache");
+      const served = await bundle.text();
+      expect(served).toBe(STATIC_ASSETS["/assets/app.js"]!.body);
+      // The typed detail view's structure is in what the browser actually
+      // receives, and the legacy module's helpers are not.
+      expect(served).toContain("detail-title-input");
+      expect(served).toContain("Mention suggestions");
+      expect(served).toContain("Could not load this item. Please try again.");
+      expect(served).not.toContain("renderMarkdown");
+      expect(served).not.toContain("diffCounts");
+
+      // Every former detail module URL stays a 404 rather than becoming a second,
+      // independently loadable copy of the item view.
+      for (const path of ["/assets/detail.js", "/assets/features/detail/index.js", "/assets/features/detail/DetailView.js"]) {
+        const legacy = await fetch(`${server.url}${path}`);
+        expect(legacy.status, path).toBe(404);
+        expect(legacy.headers.get("content-type") ?? "", path).not.toContain("javascript");
+      }
+
+      // The stylesheet the typed detail view's class names resolve against is
+      // served from the same fixed path.
+      const styles = await fetch(`${server.url}/assets/styles.css`);
+      expect(styles.status).toBe(200);
+      expect(styles.headers.get("content-type")).toBe(CSS_TYPE);
+      const servedCss = await styles.text();
+      expect(servedCss).toContain("detail-title-input");
+      expect(servedCss).toContain("detail-history");
+      expect(servedCss).toContain("mention-list");
     } finally {
       server.stop();
     }

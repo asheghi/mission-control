@@ -7,6 +7,11 @@
 // (branding, primary navigation, sign-out, live status), the stylesheet carries
 // the --wb-* tokens, and the binary still exposes the exact six-tool MCP
 // contract.
+//
+// Phase E adds the typed detail view to that same run: the compiled bundle is
+// the only place the *shipped* artifact is checked, so the detail markers below
+// are asserted on the bytes the executable actually serves after `bun run
+// build`.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -106,6 +111,71 @@ const LEGACY_LIST_SIGNATURES = [
   "Open work item #",
   "Assign to…",
   "Select #",
+] as const;
+
+// --- Phase E: the typed detail ------------------------------------------------
+//
+// The compiled binary embeds the browser bundle, so this is the only place the
+// *shipped* artifact is checked for the detail migration. The markers are the
+// same class of literal the static suite uses — surviving minification because
+// they are DOM strings, ARIA attributes, visible text, or Preact slot-prop
+// names, never minified identifiers.
+
+// The typed detail view's structure: header and title input, field controls,
+// label editor, description tabs and panels, composer with its mention listbox,
+// comment list, and history card with its diff rows.
+const TYPED_DETAIL_MARKERS = [
+  "detail-title-input",
+  "detail-controls",
+  "detail-labels",
+  "detail-body",
+  "detail-comments",
+  "detail-history",
+  "comment-head",
+  "mention-list",
+  "mention-option",
+  "diff-stat",
+  "label-suggestion",
+] as const;
+
+// The accessible names the typed detail view carries. These are the
+// user-visible strings, so they are contract rather than implementation.
+const TYPED_DETAIL_LABEL_MARKERS = [
+  "Work item #",
+  "Back to board",
+  "Description view",
+  "Preview",
+  "Edit",
+  "Mention suggestions",
+  "Add a comment",
+  "No comments yet.",
+  "No history yet.",
+  "No labels",
+  "Add label…",
+  "Delete item",
+  "description changed",
+] as const;
+
+// Source-level signatures of the legacy `src/web/detail.js` module. A minifier
+// leaves these names and calls alone, so their presence would mean the legacy
+// detail module still ships alongside the typed component, with a second
+// `detail` registration and a second set of imperative handlers.
+const LEGACY_DETAIL_SIGNATURES = [
+  "safeUrl",
+  "renderInline",
+  "renderMarkdown",
+  "formatTime",
+  "lcsOps",
+  "diffCounts",
+  "applyAssigneeSelection",
+  "renderAssigneeOptions",
+  "renderLabels",
+  "scheduleTitleSave",
+  "renderComments",
+  "renderHistory",
+  "renderHistoryEntry",
+  "resolveAssignableParticipant",
+  "tabIndexForKey",
 ] as const;
 
 function run(args: string[], cwd: string): { code: number; stdout: string; stderr: string } {
@@ -330,20 +400,99 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(bundleSource).toContain("assigneeId");
       expect(bundleSource).toContain("Unassign");
 
-      // Board and list are registered side by side with the same component shape,
-      // and the list route is registered exactly once.
+      // Board, list, and detail are registered side by side with the same
+      // component shape, and each route is registered exactly once.
       expect(bundleSource).toContain('{kind:"component",title:"List",href:"#/list",component:');
       expect(bundleSource).toContain('{kind:"component",title:"Board",href:"#/board",component:');
+      expect(bundleSource).toContain('{kind:"component",title:"Item",href:"#/item",hidden:!0,component:');
       expect(bundleSource.split('title:"List",href:"#/list"').length - 1).toBe(1);
-      // Detail is still the one legacy view, registered with `mount`, so the check
-      // below is testing for the list's signatures rather than for `mount`.
-      expect(bundleSource).toContain('{title:"Item",href:"#/item"');
+      // Phase E migrated the last legacy view, so no registration carries a
+      // `mount` any more. That absence is what proves the checks below are
+      // testing for the legacy modules' signatures rather than for `mount`.
+      expect(bundleSource).not.toContain("mount:");
 
       // The legacy list module is not bundled: its imperative row and filter
       // helpers, its synthetic role-link rows, and its own visible strings are
       // all gone.
       for (const signature of LEGACY_LIST_SIGNATURES) {
         expect(bundleSource, `legacy list signature present: ${signature}`).not.toContain(signature);
+      }
+
+      // --- Phase E: the typed detail is what shipped -----------------------
+      //
+      // The detail view is now a Preact component too. These markers prove the
+      // compiled binary serves the migrated item view rather than a stale or
+      // empty bundle, and that it is built from accessible native controls.
+      for (const marker of TYPED_DETAIL_MARKERS) {
+        expect(bundleSource, `typed detail marker missing: ${marker}`).toContain(marker);
+      }
+      for (const marker of TYPED_DETAIL_LABEL_MARKERS) {
+        expect(bundleSource, `typed detail label missing: ${marker}`).toContain(marker);
+      }
+      // The loading, refreshing, empty, and failure states survive, so a slow or
+      // missing item is never a blank page, and every failure the hook can
+      // publish is a literal in the shipped bytes.
+      expect(bundleSource).toContain("Loading item…");
+      expect(bundleSource).toContain("Refreshing item…");
+      expect(bundleSource).toContain("Item not found");
+      for (const message of [
+        "Could not load this item. Please try again.",
+        "Your change could not be saved. Please try again.",
+        "The item could not be deleted. Please try again.",
+        "Your latest edits could not be saved, so the item was not deleted.",
+        "Label changes could not be saved. Please try again.",
+        "Your comment could not be posted. Please try again.",
+        "Title cannot be empty.",
+        "Title must be 256 characters or fewer.",
+        "Description must be 100,000 characters or fewer.",
+        // Assembled at runtime from the shared label bound, so the minifier keeps
+        // the two halves of the sentence as separate literals.
+        "An item can have at most ",
+      ]) {
+        expect(bundleSource, `detail error message missing: ${message}`).toContain(message);
+      }
+      // The title input is reachable and named, and the page carries a real
+      // heading rather than an unlabelled input.
+      expect(bundleSource).toContain('for:"detail-title"');
+      expect(bundleSource).toContain("detail-page-title");
+      expect(bundleSource).toContain('"aria-label"');
+      // The description is a real tablist with Preview/Edit tabs and panels.
+      expect(bundleSource).toContain("tablist");
+      expect(bundleSource).toContain("tabpanel");
+      expect(bundleSource).toContain("aria-selected");
+      // The comment composer is a real ARIA combobox over a listbox of mention
+      // options, so @-mentions are usable from the keyboard.
+      expect(bundleSource).toContain("combobox");
+      expect(bundleSource).toContain("aria-autocomplete");
+      expect(bundleSource).toContain("aria-activedescendant");
+      expect(bundleSource).toContain("listbox");
+      // The view is built from native controls and mirrors the server's bounds,
+      // and the label input is offered the catalogue through a native datalist.
+      expect(bundleSource).toContain('"textarea"');
+      expect(bundleSource).toContain('"datalist"');
+      expect(bundleSource).toContain("maxLength");
+      expect(bundleSource).toContain("autoComplete");
+      expect(bundleSource).toContain("256");
+      expect(bundleSource).toContain("1e5");
+      expect(bundleSource).toContain("64");
+      expect(bundleSource).toContain("20");
+
+      // The legacy detail module is not bundled: its inline-markdown scanner, its
+      // LCS diff helpers, its imperative render functions, and the serial-queue
+      // helper only it imported are all gone.
+      for (const signature of LEGACY_DETAIL_SIGNATURES) {
+        expect(bundleSource, `legacy detail signature present: ${signature}`).not.toContain(signature);
+      }
+      // No former detail module URL is served, and none became a ghost route.
+      for (const path of [
+        "/assets/detail.js",
+        "/assets/features/detail.js",
+        "/assets/features/detail/index.js",
+        "/assets/features/detail/DetailView.js",
+        "/assets/features/detail/data.js",
+        "/assets/features/detail/components.js",
+      ]) {
+        expect((await fetch(`${baseUrl}${path}`)).status, path).toBe(404);
       }
 
       // No router or state library rode along, and React itself is absent.
@@ -394,7 +543,13 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(stylesSource).toContain("list-toolbar");
       expect(stylesSource).toContain("selection-bar");
       expect(stylesSource).toContain("checkbox-hit-area");
-      // The stylesheet still fetches nothing at all, after both migrations.
+      // Phase E: and the typed detail view's class names as well.
+      expect(stylesSource).toContain("detail-title-input");
+      expect(stylesSource).toContain("detail-history");
+      expect(stylesSource).toContain("detail-comments");
+      expect(stylesSource).toContain("mention-list");
+      expect(stylesSource).toContain("diff-box");
+      // The stylesheet still fetches nothing at all, after all three migrations.
       expect(stylesSource).not.toContain("@font-face");
       expect(stylesSource).not.toContain("url(");
       for (const host of ["cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "googleapis.com"]) {

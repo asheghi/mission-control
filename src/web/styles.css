@@ -192,10 +192,15 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .breadcrumb { align-self: flex-start; color: var(--accent-fg); text-decoration: none; font-size: 13px; }
 .breadcrumb:hover { text-decoration: underline; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border-muted); padding-bottom: 12px; }
-.detail-title-area { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; }
+.detail-title-area { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; margin: 0; }
+/* The h1 carries the item title as text; the input beside it is the editor.
+   The visible title is suppressed while the input shows the same value, so the
+   heading stays real semantic text without duplicating it on screen. */
+.detail-title-text { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .detail-title-input { min-width: 0; flex: 1; margin: -5px -8px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; color: var(--fg-default); font-size: 26px; line-height: 1.25; font-weight: 600; }
 .detail-title-input:hover { border-color: var(--border-default); }
 .detail-title-input:focus-visible { border-color: var(--accent-fg); }
+.detail-title-input[aria-invalid="true"] { border-color: var(--wb-color-danger-muted); }
 .detail-save-state { min-width: 64px; color: var(--fg-muted); font-size: 12px; text-align: right; }
 .detail-meta { margin-top: -10px; display: flex; align-items: center; gap: 6px; }
 .detail-controls { display: flex; gap: 16px; flex-wrap: wrap; padding: 16px; background: var(--canvas-subtle); }
@@ -222,11 +227,14 @@ button.tab[aria-selected="true"]::after { content: ""; position: absolute; right
 .mention-option:hover, .mention-option.highlighted { background: var(--accent-subtle); }
 .comment { margin-bottom: 10px; box-shadow: none; }
 .comment-head { display: flex; align-items: baseline; gap: 10px; margin: -16px -16px 12px; padding: 8px 16px; border-bottom: 1px solid var(--border-muted); background: var(--canvas-subtle); }
+/* A comment body can hold an unbroken URL or a long token; without this it
+   overflows the card and forces the whole page to scroll sideways. */
+.comment .markdown { overflow-wrap: anywhere; }
 .detail-history { font-size: 13px; }
 .detail-history h3 { margin: -16px -16px 8px; padding: 10px 16px; border-bottom: 1px solid var(--border-muted); background: var(--canvas-subtle); font-size: 13px; font-weight: 600; }
-.history-entry { padding: 7px 4px; border-bottom: 1px solid var(--border-muted); }
+.history-entry { max-width: 100%; padding: 7px 4px; border-bottom: 1px solid var(--border-muted); overflow-wrap: anywhere; }
 .history-entry:last-child { border-bottom: 0; }
-.history-entry.diff-row { border-radius: 4px; cursor: pointer; }
+.history-entry.diff-row { width: 100%; min-height: 0; border: 0; border-bottom: 1px solid var(--border-muted); border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font-size: inherit; font-weight: inherit; text-align: left; cursor: pointer; }
 .history-entry.diff-row:hover { background: var(--canvas-subtle); }
 .history-entry.diff-row:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
 .diff-stat { margin-left: 8px; font: 12px ui-monospace, monospace; }
@@ -238,6 +246,23 @@ button.tab[aria-selected="true"]::after { content: ""; position: absolute; right
 .diff-line.add { color: var(--success-fg); background: var(--success-subtle); }
 .diff-line.del { color: var(--danger-fg); background: var(--danger-subtle); }
 .diff-line.ctx { color: var(--fg-muted); }
+/* A bound was applied to the rendered diff. It is stated in words, not implied
+   by an ellipsis inside a line. */
+.diff-truncated { display: block; padding-top: 6px; font-style: italic; }
+.detail-field-note { display: block; margin-top: 4px; font-size: 12px; }
+.detail-labels .labels-add { display: flex; flex-direction: column; gap: 4px; max-width: 320px; }
+/* Typed detail view: one announcement channel, bounded popover, and contained diffs. */
+.detail-live { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.detail-state { max-width: 680px; }
+.detail-state h1, .detail-comments h2 { margin: 0 0 10px; font-size: 18px; }
+.detail-notice { margin-top: -8px; }
+.detail-controls { margin: 0; border-right: 0; border-left: 0; }
+.detail-labels .labels-title { margin-block: 0; }
+.mention-list { right: 16px; width: min(280px, calc(100% - 32px)); min-width: 0; max-height: 240px; overflow-y: auto; }
+.mention-option { width: 100%; display: block; min-height: 32px; border: 0; background: transparent; box-shadow: none; text-align: left; }
+.mention-option:hover, .mention-option.highlighted { border: 0; background: var(--accent-subtle); }
+.diff-box { max-width: 100%; max-height: 360px; overscroll-behavior: contain; }
+.diff-box:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
 
 @media (max-width: 1000px) {
   .board { grid-template-columns: repeat(2, minmax(240px, 1fr)); }
