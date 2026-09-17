@@ -3,6 +3,7 @@
 // Every response carries a correlation ID in x-request-id.
 import { WorkboardError, type WorkboardErrorCode } from "../domain/errors";
 import { PayloadTooLargeError, ValidationError } from "../domain/errors";
+import { boundedDiagnostic } from "../observability/diagnostic";
 
 const STATUS_BY_CODE: Record<WorkboardErrorCode, number> = {
   VALIDATION: 400,
@@ -65,12 +66,13 @@ export function mapErrorWithReport(
 }
 
 /**
- * Report an unhandled failure without collecting the exception. Messages and
- * stacks can contain request bodies, item content, or credentials, so the log
- * record is deliberately fixed and includes only the validated request id.
+ * Report an unhandled failure. The request id is always recorded so a client's
+ * correlation id can be matched to the log line; the exception itself is
+ * reduced to a bounded class-name-and-message diagnostic, never a stack and
+ * never the raw object, because either can carry request-derived material.
  */
-export function reportUnexpectedError(_error: unknown, requestId: string): void {
-  console.error(`[api] unhandled error (request ${boundedRequestId(requestId)})`);
+export function reportUnexpectedError(error: unknown, requestId: string): void {
+  console.error(`[api] unhandled error (request ${boundedRequestId(requestId)}): ${boundedDiagnostic(error)}`);
 }
 
 function boundedRequestId(requestId: string): string {

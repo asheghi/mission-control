@@ -20,6 +20,7 @@ import { runStdioMcpServer } from "./mcp/stdio";
 import { APP_VERSION } from "./version";
 import { backupDatabase, defaultBackupPath, restoreDatabase, runDoctor as doctorChecks } from "./maintenance/backup";
 import { STATIC_ASSETS } from "./web/static-assets";
+import { boundedDiagnostic } from "./observability/diagnostic";
 
 interface ParsedArgs {
   readonly flags: Map<string, string | boolean>;
@@ -576,7 +577,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       console.error(`workboard: ${error.message}`);
       return 1;
     }
-    console.error("workboard: unexpected error.");
+    // An unexpected failure is still a local operator's problem to fix, so the
+    // class name and a bounded single-line message are recorded. Credentials and
+    // item content are never collected into this diagnostic (see the helper).
+    console.error(`workboard: unexpected error: ${boundedDiagnostic(error)}`);
     return 1;
   }
 }
