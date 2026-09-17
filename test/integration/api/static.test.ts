@@ -1,7 +1,7 @@
-// Static web shell tests, updated for the Phase B Preact shell and semantic
-// token contract.
+// Static web shell tests, updated for the Phase B Preact shell, the Phase D–E
+// typed views, and the Phase F removal of the legacy frontend.
 //
-// The public surface is unchanged from Phase A: `scripts/build-web.ts` bundles
+// The public surface is unchanged: `scripts/build-web.ts` bundles
 // `src/web/main.tsx` (Preact plus the typed board, list, and detail features)
 // into exactly two artifacts, and `src/web/static-assets.ts` is the single asset
 // table the server embeds. This suite imports that same table rather than
@@ -10,16 +10,21 @@
 //
 // What changed for Phase B: the shell is now the top-level Preact application
 // (branding, primary navigation, sign-out, live status), the Phase A marker is
-// gone, and the stylesheet carries the `--wb-*` semantic token layer. The old
-// side-effectful `src/web/app.js` shell still exists in the source tree for the
-// legacy modules' compatibility re-exports, but it must not be reachable as a
-// page script of its own.
+// gone, and the stylesheet carries the `--wb-*` semantic token layer.
+//
+// What changed for Phase F: the legacy frontend is deleted rather than merely
+// unreachable. The imperative `board.js`/`list.js`/`detail.js` modules, the
+// inert `legacy-bridge.js` navigation/DOM bridge, and the `app.js` compatibility
+// re-export surface are gone from the source tree, so no source module declares
+// them as an embedded text asset any more. With them went the shell's last
+// compatibility surfaces: the `mount` host, the legacy lifecycle/route types,
+// the DOM error bridge, and the `setNavigateRenderer` shell hook.
 //
 // What is still asserted, in the same spirit as the original Task 12 suite:
 // traversal-proof path matching, exact content types, the reserved-route
 // dispatch order, and Workboard branding surviving inside the bundle.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initializeDatabase } from "../../../src/db/database";
@@ -31,35 +36,90 @@ import type { StaticAsset } from "../../../src/api/app";
 // The production asset table (not a copy of it): this is what `cli.ts` hands
 // to createApiHandler for the real `serve` command.
 import { STATIC_ASSETS } from "../../../src/web/static-assets";
+// The production view registry. Asserting on the registry the shell actually
+// reads — rather than on a copy — is what makes "component-only" a contract.
+import { views } from "../../../src/web/views";
+// The registry is filled by the feature modules' import side effects, exactly as
+// `src/web/main.tsx` fills it. Importing them here means these tests assert on
+// the registry the shipped bundle actually builds, not an empty one.
+import "../../../src/web/features/board";
+import "../../../src/web/features/list";
+import "../../../src/web/features/detail";
 
 const HTML_TYPE = "text/html; charset=utf-8";
 const JS_TYPE = "text/javascript; charset=utf-8";
 const CSS_TYPE = "text/css; charset=utf-8";
+
+const WEB_SOURCE_DIR = join(import.meta.dir, "..", "..", "..", "src", "web");
 
 // The public surface stays fixed at exactly these four paths. Anything else
 // under /assets/ — including the pre-bundle module URLs — must be a 404, so a
 // stale index.html cannot quietly keep working against a missing file.
 const EXPECTED_PATHS = ["/", "/index.html", "/assets/app.js", "/assets/styles.css"] as const;
 
-// Source-tree module URLs that must never be served as their own asset: one
-// bundle serves the whole UI, and the legacy shell must not be reachable as an
-// independently loadable page script.
-const LEGACY_MODULE_PATHS = [
-  "/assets/api.js",
-  "/assets/views.js",
-  "/assets/ui-state.js",
-  "/assets/legacy-bridge.js",
-  "/assets/shell/AppShell.js",
-  "/assets/shell/LegacyView.js",
+// -----------------------------------------------------------------------------
+// Phase F — the legacy frontend is deleted, not hidden
+//
+// Phase C/D/E replaced board, list, and detail one at a time while the legacy
+// modules stayed in the tree. Phase F finishes the job: the imperative modules,
+// the inert `legacy-bridge.js` DOM/navigation bridge they shared, and the
+// `app.js` compatibility re-export surface are removed outright. Three failure
+// modes are worth a test apiece, and none is visible to a unit test:
+//
+//   1. A module is still on disk (so it can be re-imported by a later change)
+//      even though nothing serves it.
+//   2. A deleted module is still reachable over HTTP, or is still a declared
+//      text-asset import in `src/assets.d.ts`.
+//   3. A compatibility symbol survives in the bundle — the `mount` host, the
+//      `setNavigateRenderer` shell hook, the DOM error bridge — keeping the
+//      legacy path alive with no module behind it.
+// -----------------------------------------------------------------------------
+
+// The legacy source modules Phase F deletes. Each is asserted absent from the
+// source tree, from the served asset surface, and (by its signatures) from the
+// bundle.
+const DELETED_LEGACY_MODULES = [
+  "board.js",
+  "list.js",
+  "detail.js",
+  "legacy-bridge.js",
+  "app.js",
+  "shell/LegacyView.tsx",
+] as const;
+
+// Public URLs for the deleted modules. `app.js` is called out separately below
+// because `/assets/app.js` is the one bundle path that *is* served — the
+// deleted source module shares its basename but not its URL contract.
+const DELETED_LEGACY_MODULE_PATHS = [
   "/assets/board.js",
   "/assets/list.js",
+  "/assets/detail.js",
+  "/assets/legacy-bridge.js",
+  "/assets/views.js",
+  "/assets/views.ts",
+  "/assets/shell/LegacyView.js",
+  "/assets/shell/LegacyView.tsx",
+  "/assets/shell/ViewHost.js",
+  "/assets/shell/AppShell.js",
+  "/assets/legacy-bridge.js.map",
+  "/app.js",
+] as const;
+
+// Source-tree module URLs that must never be served as their own asset: one
+// bundle serves the whole UI, and no shell module must be reachable as an
+// independently loadable page script. The deleted legacy modules are the same
+// contract, asserted from the same list.
+const LEGACY_MODULE_PATHS = [
+  "/assets/api.js",
+  "/assets/ui-state.js",
+  "/assets/public-errors.js",
   "/assets/features/list.js",
   "/assets/features/list/index.js",
   "/assets/features/list/data.js",
   "/assets/features/list/ListView.js",
-  "/assets/detail.js",
   "/assets/app.js.map",
   "/assets/ui-state.js.map",
+  ...DELETED_LEGACY_MODULE_PATHS,
 ] as const;
 
 // Markers of the Phase A placeholder shell that Phase B replaced. None of them
@@ -404,6 +464,39 @@ function referencedPaths(html: string): string[] {
   return paths;
 }
 
+interface WebSource {
+  /** Path relative to `src/web`, so failures name the module, not an absolute path. */
+  path: string;
+  text: string;
+}
+
+/**
+ * Every surviving module under `src/web`, as source text.
+ *
+ * Phase F asserts on the import graph rather than only on served bytes: a deleted
+ * module that is still imported by a live one is a build failure in disguise, and
+ * a second API client or SSE owner would only show up here. The walk is over
+ * TypeScript sources only — the browser bundle is compiled from them, so they are
+ * the whole graph.
+ */
+function sourceModuleText(): WebSource[] {
+  const sources: WebSource[] = [];
+  const walk = (dir: string, prefix: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      const absolute = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(absolute, relative);
+      } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx") || entry.name.endsWith(".js")) {
+        sources.push({ path: relative, text: readFileSync(absolute, "utf8") });
+      }
+    }
+  };
+  walk(WEB_SOURCE_DIR, "");
+  return sources;
+}
+
 describe("static web shell", () => {
   test("declares exactly the four fixed public paths", () => {
     expect(Object.keys(STATIC_ASSETS).sort()).toEqual([...EXPECTED_PATHS].sort());
@@ -506,17 +599,28 @@ describe("static web shell", () => {
       }
       // The old side-effectful app.js shell does not ship as the live shell:
       // its store assignments, top-level render entry point, and hashchange
-      // bootstrap are all absent from the bundle.
+      // bootstrap are all absent from the bundle — and as of Phase F the source
+      // module behind them no longer exists either.
       expect(servedAppJs).not.toContain("app.replaceChildren");
       expect(servedAppJs).not.toContain("function renderShell");
       expect(servedAppJs).not.toContain("renderLogin");
       expect(servedAppJs).not.toContain('addEventListener("hashchange",render');
+
+      // Phase F: the compatibility bridge is gone with the modules that used it.
+      // A surviving `setNavigateRenderer` would mean the shell still exports a
+      // hook for an imperative view to re-render through; a surviving `mount:`
+      // would mean the registry still accepts one.
+      expect(servedAppJs).not.toContain("setNavigateRenderer");
+      expect(servedAppJs).not.toContain("navigateRenderer");
+      expect(servedAppJs).not.toContain("mount:");
 
       // Exactly one live transport, and it is the fetch-based SSE client:
       // a browser-native EventSource cannot carry the bearer header, and a
       // WebSocket transport was never part of this design.
       expect(servedAppJs).not.toContain("EventSource");
       expect(servedAppJs).not.toContain("WebSocket");
+      // One SSE owner: the feed is opened once, by the shell.
+      expect(occurrences(servedAppJs, "api/events")).toBe(1);
 
       // Served verbatim: the asset is the embedded string, not a re-render.
       expect(servedAppJs).toBe(STATIC_ASSETS["/assets/app.js"]!.body);
@@ -605,29 +709,196 @@ describe("static web shell", () => {
     expect(css).toContain("outline:2px solid var(--wb-color-focus-outline)");
   });
 
-  test("legacy selectors coexist with the semantic token layer", () => {
+  test("the deleted legacy modules are absent from the source tree and the import graph", () => {
+    // Failure mode 1: a module survives on disk and can be re-imported later.
+    for (const relative of DELETED_LEGACY_MODULES) {
+      expect(existsSync(join(WEB_SOURCE_DIR, relative)), `legacy module still on disk: ${relative}`).toBe(false);
+    }
+
+    // Failure mode 2: a deleted module is still declared as an embeddable text
+    // asset. `src/assets.d.ts` is the only place a source module could be
+    // re-admitted as a bundled string, so it must name none of them — and must
+    // declare nothing beyond the two asset kinds the tree genuinely imports.
+    const declarations = readFileSync(join(WEB_SOURCE_DIR, "..", "assets.d.ts"), "utf8");
+    const declared = [...declarations.matchAll(/declare module "([^"]+)"/g)].map((match) => match[1]!);
+    expect(declared.sort()).toEqual(["*.css", "*.html"]);
+    for (const relative of DELETED_LEGACY_MODULES) {
+      const basename = relative.split("/").pop()!;
+      expect(declarations, `legacy module declared as an asset: ${basename}`).not.toContain(basename);
+    }
+    // `api.js`, `ui-state.js`, and `public-errors.js` are current shared modules,
+    // not legacy ones — but they are ES imports, never text assets, so they must
+    // not be declared here either.
+    for (const shared of ["api.js", "ui-state.js", "public-errors.js", "views.js"]) {
+      expect(declarations, `shared module declared as a text asset: ${shared}`).not.toContain(shared);
+    }
+
+    // Every surviving web source module is reachable from the single entrypoint,
+    // and no surviving import names a deleted module.
+    const sources = sourceModuleText();
+    expect(sources.length).toBeGreaterThan(10);
+    for (const legacy of ["./legacy-bridge", "../legacy-bridge", "./board", "./list", "./detail", "./app.js", "views.js"]) {
+      for (const source of sources) {
+        expect(source.text, `${source.path} still imports ${legacy}`).not.toContain(`"${legacy}"`);
+      }
+    }
+    // The registry module is TypeScript now, and nothing imports the old path.
+    expect(existsSync(join(WEB_SOURCE_DIR, "views.ts"))).toBe(true);
+    expect(existsSync(join(WEB_SOURCE_DIR, "views.js"))).toBe(false);
+  });
+
+  test("the shell has no legacy host, lifecycle, route, or navigation bridge", () => {
+    const shell = ["shell/AppShell.tsx", "shell/ViewHost.tsx", "shell/types.ts", "shell/safe-error.ts"]
+      .map((relative) => ({ path: relative, text: readFileSync(join(WEB_SOURCE_DIR, relative), "utf8") }));
+    const all = shell.map((file) => file.text).join("\n");
+
+    // The compatibility type surface and the DOM mount/error bridge are gone.
+    for (const symbol of [
+      "LegacyView",
+      "LegacyLifecycle",
+      "LegacyRoute",
+      "LegacyViewDefinition",
+      "LegacyHost",
+      "LegacyLifecycleHandle",
+      "setNavigateRenderer",
+      "showMountError",
+      "errorBanner",
+      "replaceChildren",
+      "createElement",
+    ]) {
+      expect(all, `legacy shell symbol survives: ${symbol}`).not.toContain(symbol);
+    }
+    // The host is component-only: exactly one render path, no `kind` branch.
+    const host = shell.find((file) => file.path === "shell/ViewHost.tsx")!;
+    expect(host.text).toContain("export function ViewHost");
+    expect(host.text).not.toContain('"legacy"');
+    expect(host.text).not.toContain("view.kind ===");
+    expect(existsSync(join(WEB_SOURCE_DIR, "shell", "LegacyView.tsx"))).toBe(false);
+    // And the registry is a null-prototype record of component definitions: a
+    // router lookup can never resolve an inherited Object.prototype key.
+    expect(readFileSync(join(WEB_SOURCE_DIR, "views.ts"), "utf8")).toContain(
+      "Object.assign(Object.create(null), {})",
+    );
+  });
+
+  test("the registry holds component definitions only", () => {
+    // The production registry, as the shell reads it. Every entry is a component
+    // definition with a real renderer — there is no `mount` registrant left and
+    // no `kind` other than "component".
+    const entries = Object.entries(views);
+    expect(entries.map(([name]) => name).sort()).toEqual(["board", "detail", "list"]);
+    for (const [name, entry] of entries) {
+      expect(entry.kind, name).toBe("component");
+      expect(typeof entry.component, name).toBe("function");
+      expect((entry as { mount?: unknown }).mount, name).toBeUndefined();
+      expect(entry.href, name).toStartWith("#/");
+      expect(entry.title, name).not.toBe("");
+    }
+    // The registry has no prototype, so an inherited key is never a view.
+    expect(Object.getPrototypeOf(views)).toBeNull();
+    for (const inherited of ["constructor", "toString", "hasOwnProperty", "__proto__"]) {
+      expect(views[inherited], inherited).toBeUndefined();
+    }
+  });
+
+  test("exactly one API import path and one SSE owner remain", () => {
+    const sources = sourceModuleText();
+
+    // One API client module, imported through one relative path shape. Nothing
+    // moved and no second client was added, so the suffix below is the contract.
+    const apiImporters = sources.filter((source) => /from "[^"]*\/api\.js"/.test(source.text));
+    expect(apiImporters.map((source) => source.path).sort()).toEqual([
+      "features/board/hooks.ts",
+      "features/detail/hooks.ts",
+      "features/list/hooks.ts",
+      "public-errors.js",
+      "shell/AppShell.tsx",
+    ]);
+    for (const source of apiImporters) {
+      // `public-errors.js` sits beside the client and reaches it the same way,
+      // so the shape is "ai.js or a relative climb up to it" — never a bare
+      // specifier, a package name, or a second client under another path.
+      const specifiers = [...source.text.matchAll(/from "([^"]*\/api\.js)"/g)].map((match) => match[1]!);
+      expect(specifiers.length, source.path).toBeGreaterThan(0);
+      for (const specifier of specifiers) {
+        expect(specifier, source.path).toMatch(/^(\.\/|(\.\.\/)+)api\.js$/);
+      }
+    }
+    // The current shared modules are expected paths, not deletions.
+    for (const shared of ["api.js", "ui-state.js", "public-errors.js"]) {
+      expect(existsSync(join(WEB_SOURCE_DIR, shared)), `shared module missing: ${shared}`).toBe(true);
+    }
+
+    // One SSE owner: `api.js` owns the transport, the shell owns the single
+    // subscription, and no view opens its own stream.
+    const sseCallers = sources.filter((source) => source.text.includes("subscribeEvents("));
+    expect(sseCallers.map((source) => source.path).sort()).toEqual(["api.js", "shell/AppShell.tsx"]);
+    expect(occurrences(STATIC_ASSETS["/assets/app.js"]!.body, "api/events")).toBe(1);
+  });
+
+
+  test("the stylesheet consumes only semantic --wb-* tokens", () => {
     const css = STATIC_ASSETS["/assets/styles.css"]!.body;
 
-    // The not-yet-migrated board/list/detail selectors keep working because the
-    // compatibility aliases still resolve to the semantic tokens.
-    expect(css).toContain(".live-indicator");
-    expect(css).toContain(".board-card");
-    expect(css).toContain(".list-table");
-    expect(css).toMatch(/--canvas-default:var\(--wb-color-canvas-default\)/);
-    expect(css).toMatch(/--focus-outline:var\(--wb-color-focus-outline\)/);
-    // Those aliases are actually consumed: a rule still paints through them.
-    expect(css).toContain("var(--canvas-default)");
-    expect(css).toContain("var(--focus-outline)");
-    // The alias block is a mapping, not a second source of truth: every entry
-    // resolves to a --wb-* token and none hard-codes a colour of its own.
-    const aliasStart = css.indexOf("--base-white:");
-    const aliasBlock = css.slice(aliasStart, css.indexOf("}", aliasStart));
-    expect(aliasBlock).toContain("--canvas-default:var(--wb-color-canvas-default)");
-    expect(aliasBlock).not.toMatch(/#[0-9a-f]{3,8}\b/i);
-    for (const declaration of aliasBlock.split(";")) {
-      if (declaration.trim() === "") continue;
-      expect(declaration, declaration).toContain("var(--wb-");
+    // Phase F deleted the compatibility alias layer. Every custom property the
+    // stylesheet *consumes* is now a --wb-* token, so a rule can no longer paint
+    // through an alias that a future token rename would silently orphan. Only
+    // the definition sites are exempt, and those are the token layer itself.
+    const consumed = [...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((match) => match[1]!);
+    expect(consumed.length).toBeGreaterThan(0);
+    for (const token of consumed) {
+      expect(token, `non-semantic token consumed: ${token}`).toStartWith("--wb-");
     }
+    // The alias names are gone entirely — not merely unused.
+    for (const alias of [
+      "--canvas-default",
+      "--canvas-subtle",
+      "--canvas-inset",
+      "--fg-default",
+      "--fg-muted",
+      "--border-default",
+      "--border-muted",
+      "--accent-fg",
+      "--accent-emphasis",
+      "--accent-muted",
+      "--accent-subtle",
+      "--success-fg",
+      "--success-subtle",
+      "--danger-fg",
+      "--danger-subtle",
+      "--attention-fg",
+      "--attention-subtle",
+      "--neutral-emphasis",
+      "--shadow-small",
+      "--shadow-medium",
+      "--focus-outline",
+      "--header-bg",
+      "--base-white",
+    ]) {
+      // `var(--canvas-default)` and the definition `--canvas-default:` are both
+      // failures: the first means a rule still consumes the alias, the second
+      // that the alias block survived. A --wb-* token that merely *ends* in one
+      // of these names (e.g. --wb-color-canvas-default) must not trip this.
+      expect(css, `legacy alias consumed: ${alias}`).not.toContain(`var(${alias})`);
+      expect(css, `legacy alias defined: ${alias}`).not.toContain(`${alias}:`);
+    }
+
+    // The tokens the components actually depend on are still defined, and the
+    // radius/shadow aliases resolve to the token layer rather than vanishing
+    // with the compatibility block that used to hold them.
+    for (const token of [
+      "--wb-color-canvas-default:",
+      "--wb-color-focus-outline:",
+      "--wb-radius-medium:",
+      "--wb-shadow-small:",
+      "--wb-shadow-medium:",
+      "--wb-control-medium:",
+    ]) {
+      expect(css, `${token} is not defined`).toContain(token);
+    }
+    // A rule really does paint through the token core directly, which is the
+    // whole point of the migration: the board card is the canonical example.
+    expect(css).toMatch(/\.board-card\{[^}]*var\(--wb-shadow-small\)/);
   });
 
   test("serves every declared asset, and only those", async () => {

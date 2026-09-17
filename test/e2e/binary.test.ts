@@ -12,6 +12,12 @@
 // the only place the *shipped* artifact is checked, so the detail markers below
 // are asserted on the bytes the executable actually serves after `bun run
 // build`.
+//
+// Phase F deletes the legacy frontend and asserts that deletion on the shipped
+// bytes: the imperative board/list/detail modules, the `legacy-bridge.js` DOM and
+// navigation bridge, and the `app.js` compatibility re-exports are gone, their
+// former URLs are still 404s, and no compatibility symbol — the `mount` host,
+// `setNavigateRenderer`, the DOM error bridge — survives inside the binary.
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -178,6 +184,72 @@ const LEGACY_DETAIL_SIGNATURES = [
   "tabIndexForKey",
 ] as const;
 
+// --- Phase F: the legacy frontend is deleted ---------------------------------
+//
+// The compiled binary embeds the browser bundle, so this is the only place the
+// *shipped* artifact is checked for the deletion itself. The source-tree suite
+// proves the modules are off disk and out of the import graph; this proves the
+// bytes the executable serves carry none of their signatures, that their former
+// URLs are still 404s at the real route, and that the public asset contract —
+// one bundle at one fixed path, one stylesheet, no external dependency — is
+// exactly what it was before the deletion.
+
+// Former module URLs for the deleted sources. None may become a ghost route, and
+// `/assets/app.js` is deliberately absent: that is the one bundle path that *is*
+// served, and it shares a basename with the deleted `src/web/app.js` module
+// without sharing its URL.
+const DELETED_LEGACY_PATHS = [
+  "/assets/board.js",
+  "/assets/list.js",
+  "/assets/detail.js",
+  "/assets/legacy-bridge.js",
+  "/assets/views.js",
+  "/assets/views.ts",
+  "/assets/shell/LegacyView.js",
+  "/assets/shell/LegacyView.tsx",
+  "/app.js",
+] as const;
+
+// Source-level markers of the deleted modules and of the shell's compatibility
+// surfaces. A minifier leaves these names and calls alone, so any one of them
+// surviving in the shipped bytes means the legacy path is still compiled in.
+const DELETED_LEGACY_BUNDLE_MARKERS = [
+  // `legacy-bridge.js`
+  "setNavigateRenderer",
+  "navigateRenderer",
+  // The inert `app.js` re-export surface
+  "errorBanner",
+  // The shell's DOM error bridge and legacy host
+  "showMountError",
+  "LegacyView",
+  "LegacyHost",
+  "LegacyLifecycle",
+  "LegacyRoute",
+  // The DOM error bridge built its own banner element; the top-level Preact
+  // error boundary renders the shell's banner instead, so this exact call shape
+  // is the deleted bridge's signature.
+  'createElement("div")',
+  // The registry's imperative registration shape
+  "mount:",
+] as const;
+
+// The one JavaScript and one CSS bundle path, plus the document. Anything the
+// page loads is one of these; anything else is a 404.
+const FIXED_ASSET_PATHS = ["/", "/index.html", "/assets/app.js", "/assets/styles.css"] as const;
+
+// Third-party origins that must never appear in a served asset, so the single
+// executable stays genuinely offline.
+const THIRD_PARTY_ASSET_HOSTS = [
+  "cdn.jsdelivr.net",
+  "unpkg.com",
+  "cdnjs.cloudflare.com",
+  "esm.sh",
+  "skypack.dev",
+  "googleapis.com",
+  "gstatic.com",
+  "fonts.googleapis.com",
+] as const;
+
 function run(args: string[], cwd: string): { code: number; stdout: string; stderr: string } {
   const proc = Bun.spawnSync([BINARY, ...args], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   return {
@@ -253,6 +325,10 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
         "/assets/app.js",
         "/assets/styles.css",
       ]);
+      // One script, one stylesheet: the page has no second entry point it could
+      // use to load a legacy module as its own page script.
+      expect(shellHtml.match(/<script\b/g)?.length).toBe(1);
+      expect(shellHtml.match(/<link\b[^>]*rel="stylesheet"/g)?.length).toBe(1);
       for (const value of shellReferences) {
         expect(value, "remote reference").not.toMatch(/^(https?:)?\/\//);
       }
@@ -264,9 +340,7 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       // is compiled into the binary, so a missing one breaks the UI at runtime
       // with no build error.
       const assets = await Promise.all(
-        ["/", "/index.html", "/assets/app.js", "/assets/styles.css"].map(
-          async (path) => ({ path, response: await fetch(`${baseUrl}${path}`) }),
-        ),
+        FIXED_ASSET_PATHS.map(async (path) => ({ path, response: await fetch(`${baseUrl}${path}`) })),
       );
       for (const { path, response } of assets) {
         expect(response.status, path).toBe(200);
@@ -277,19 +351,22 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       for (const path of [
         "/assets/api.js",
         "/assets/ui-state.js",
-        "/assets/views.js",
-        "/assets/legacy-bridge.js",
         "/assets/shell/AppShell.js",
-        "/assets/board.js",
-        "/assets/list.js",
         "/assets/features/list.js",
         "/assets/features/list/index.js",
         "/assets/features/list/ListView.js",
-        "/assets/detail.js",
-        "/app.js",
         "/assets/app.js.map",
+        ...DELETED_LEGACY_PATHS,
       ]) {
         expect((await fetch(`${baseUrl}${path}`)).status, path).toBe(404);
+      }
+      // Phase F: the deleted modules are gone over HTTP, not merely unimported.
+      // Each answers 404 with no JavaScript content type, so a stale document
+      // could not load one even if it still referenced it.
+      for (const path of DELETED_LEGACY_PATHS) {
+        const response = await fetch(`${baseUrl}${path}`);
+        expect(response.status, path).toBe(404);
+        expect(response.headers.get("content-type") ?? "", path).not.toContain("javascript");
       }
 
       const bundle = await fetch(`${baseUrl}/assets/app.js`);
@@ -495,6 +572,21 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
         expect((await fetch(`${baseUrl}${path}`)).status, path).toBe(404);
       }
 
+      // --- Phase F: the legacy frontend is not in the shipped bytes ----------
+      //
+      // The deleted modules and the shell's compatibility surfaces are asserted
+      // absent from what the executable actually serves. `mount:` is the registry
+      // shape that would prove a registrant can still bypass the component host,
+      // and the rest are the bridge's own names and calls.
+      for (const marker of DELETED_LEGACY_BUNDLE_MARKERS) {
+        expect(bundleSource, `deleted legacy marker present: ${marker}`).not.toContain(marker);
+      }
+      // Exactly one registration shape remains: `kind: "component"` with a
+      // renderer, once per route and no more.
+      expect(bundleSource.split('kind:"component"').length - 1).toBe(3);
+      // One SSE path and one API client path, unchanged by the deletion.
+      expect(bundleSource.split("api/events").length - 1).toBe(1);
+
       // No router or state library rode along, and React itself is absent.
       for (const signature of ["preact-router", "preact/compat", "TanStack", "QueryClient", "zustand", "redux"]) {
         expect(bundleSource, `disallowed library present: ${signature}`).not.toContain(signature);
@@ -530,9 +622,23 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(stylesSource).toContain("@media (prefers-color-scheme:dark)");
       expect(stylesSource).toContain("@media (prefers-reduced-motion:reduce)");
       expect(stylesSource).toContain(":focus-visible");
-      // Legacy selectors still coexist with the token layer.
+      // Phase F: the compatibility alias layer is gone, so every custom
+      // property the stylesheet consumes is a --wb-* token defined in the token
+      // layer. The legacy alias names appear neither as a declaration nor as a
+      // `var()` reference.
       expect(stylesSource).toContain(".live-indicator");
-      expect(stylesSource).toContain("--canvas-default:var(--wb-color-canvas-default)");
+      const consumedTokens = [...stylesSource.matchAll(/var\((--[a-z0-9-]+)/g)].map((match) => match[1]!);
+      expect(consumedTokens.length).toBeGreaterThan(0);
+      for (const token of consumedTokens) {
+        expect(token, `non-semantic token consumed: ${token}`).toStartWith("--wb-");
+      }
+      // `--canvas-default:` also matches inside `--wb-color-canvas-default:`, so
+      // the check is on the exact declaration and the exact `var()` reference.
+      for (const alias of ["--canvas-default", "--fg-muted", "--focus-outline", "--radius", "--header-bg"]) {
+        expect(stylesSource, `legacy alias referenced: ${alias}`).not.toContain(`var(${alias})`);
+        expect(stylesSource, `legacy alias defined: ${alias}`).not.toMatch(new RegExp(`(^|[;{])${alias}:`));
+      }
+      expect(stylesSource).toMatch(/\.board-card\{[^}]*var\(--wb-shadow-small\)/);
       // Phase C: the typed board's class names resolve against this same
       // single stylesheet, and it still fetches nothing at all.
       expect(stylesSource).toContain("board-column");
@@ -552,7 +658,7 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       // The stylesheet still fetches nothing at all, after all three migrations.
       expect(stylesSource).not.toContain("@font-face");
       expect(stylesSource).not.toContain("url(");
-      for (const host of ["cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "esm.sh", "googleapis.com"]) {
+      for (const host of THIRD_PARTY_ASSET_HOSTS) {
         expect(stylesSource, `third-party host in stylesheet: ${host}`).not.toContain(host);
       }
 

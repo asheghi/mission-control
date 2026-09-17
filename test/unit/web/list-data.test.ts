@@ -32,7 +32,7 @@ import {
 import { LIST_STATUSES } from "../../../src/web/features/list/types";
 import type { ListItem, ListParticipant } from "../../../src/web/features/list/types";
 import { createFilterStore, emptyFilters } from "../../../src/web/ui-state.js";
-import { views } from "../../../src/web/views.js";
+import { views } from "../../../src/web/views";
 // Importing the feature is what registers the view; the module itself exports
 // only the component and its props type.
 import "../../../src/web/features/list/index";

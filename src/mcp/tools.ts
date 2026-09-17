@@ -4,29 +4,16 @@
 // never from tool arguments.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { WorkboardError } from "../domain/errors";
 import type { Actor } from "../domain/types";
 import { workStatusSchema } from "../domain/validation";
 import { resolveItemQuery } from "../app/item-query";
 import type { WorkboardService } from "../app/workboard";
 import { APP_VERSION } from "../version";
+import { mcpErrorResult } from "./error-result";
+import type { McpToolResult } from "./error-result";
 
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
-
-function jsonTool(value: unknown): ToolResult {
+function jsonTool(value: unknown): McpToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
-}
-
-function errorTool(error: unknown): ToolResult {
-  const message =
-    error instanceof WorkboardError ? error.message : "The request could not be completed.";
-  if (!(error instanceof WorkboardError)) {
-    console.error("[mcp] unexpected tool error", error);
-  }
-  return { content: [{ type: "text", text: message }], isError: true };
 }
 
 const idSchema = z.number().int().positive();
@@ -49,7 +36,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
         const result = service.myWork(actor, args);
         return jsonTool({ items: result.items, nextCursor: result.nextCursor });
       } catch (error) {
-        return errorTool(error);
+        return mcpErrorResult(error);
       }
     },
   );
@@ -75,7 +62,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
         const result = service.listItems(actor, filter);
         return jsonTool({ items: result.items, nextCursor: result.nextCursor });
       } catch (error) {
-        return errorTool(error);
+        return mcpErrorResult(error);
       }
     },
   );
@@ -90,7 +77,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
       try {
         return jsonTool(service.getItem(actor, id));
       } catch (error) {
-        return errorTool(error);
+        return mcpErrorResult(error);
       }
     },
   );
@@ -112,7 +99,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
       try {
         return jsonTool(service.createItem(actor, args));
       } catch (error) {
-        return errorTool(error);
+        return mcpErrorResult(error);
       }
     },
   );
@@ -138,7 +125,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
         const result = service.updateItem(actor, id, defined);
         return jsonTool({ ...result, changedFields: result.changedFields });
       } catch (error) {
-        return errorTool(error);
+        return mcpErrorResult(error);
       }
     },
   );
@@ -158,7 +145,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
         const result = service.addComment(actor, id, { body });
         return jsonTool(result);
       } catch (error) {
-        return errorTool(error);
+        return mcpErrorResult(error);
       }
     },
   );

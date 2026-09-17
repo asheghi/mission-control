@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import * as api from "../api.js";
-import { setNavigateRenderer } from "../legacy-bridge.js";
 import { isTerminalAuthError } from "../public-errors.js";
-import { views } from "../views.js";
+import { views } from "../views";
 import { createLiveRefreshController, liveIndicatorState, navigationState, resolveHashRoute } from "../ui-state.js";
-import { ViewHost } from "./LegacyView";
+import { ViewHost } from "./ViewHost";
 import { safeErrorMessage } from "./safe-error";
-import type { EventStreamHandle, LiveController, ViewDefinition, ViewRoute } from "./types";
+import type { ComponentViewDefinition, EventStreamHandle, LiveController, ViewRoute } from "./types";
 
 interface LoginProps {
   onSignedIn: (hash: string) => void;
@@ -161,14 +160,9 @@ export function AppShell() {
     };
   }, [authenticationFailed, liveRefresh]);
 
-  useEffect(() => {
-    setNavigateRenderer(() => refreshViewRef.current());
-    return () => setNavigateRenderer(null);
-  }, []);
-
   const route = useMemo(() => resolveHashRoute(views, hash) as ViewRoute, [hash]);
   const navEntries = useMemo(
-    () => Object.entries(views as Record<string, ViewDefinition>)
+    () => Object.entries(views as Record<string, ComponentViewDefinition>)
       .filter(([, entry]) => !entry.hidden)
       .map(([name, entry]) => ({ ...entry, name })),
     [],
@@ -234,7 +228,7 @@ export function AppShell() {
           key={hash}
           view={route.view}
           params={route.params}
-          generation={refreshGeneration}
+          refreshGeneration={refreshGeneration}
           onAuthenticationFailure={authenticationFailed}
         />
       </main>

@@ -65,23 +65,12 @@ export function mapErrorWithReport(
 }
 
 /**
- * Default report for an unhandled failure. It records a class name plus a
- * bounded single-line message rather than the raw error: a stack trace and an
- * unbounded message can both carry request-derived material (body text, an
- * item title) into the log, which the observability rules forbid. Callers that
- * want stack diagnostics attach a debugger or a sink of their own.
+ * Report an unhandled failure without collecting the exception. Messages and
+ * stacks can contain request bodies, item content, or credentials, so the log
+ * record is deliberately fixed and includes only the validated request id.
  */
-export function reportUnexpectedError(error: unknown, requestId: string): void {
-  const detail = error instanceof Error ? `${error.name}: ${boundedDiagnostic(error.message)}` : typeof error;
-  console.error(`[api] unhandled error (request ${boundedRequestId(requestId)}): ${detail}`);
-}
-
-const MAX_DIAGNOSTIC_LENGTH = 500;
-
-function boundedDiagnostic(message: string): string {
-  // Control characters (including CR/LF) would forge extra log lines.
-  const cleaned = message.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
-  return cleaned.length > MAX_DIAGNOSTIC_LENGTH ? `${cleaned.slice(0, MAX_DIAGNOSTIC_LENGTH)}...` : cleaned;
+export function reportUnexpectedError(_error: unknown, requestId: string): void {
+  console.error(`[api] unhandled error (request ${boundedRequestId(requestId)})`);
 }
 
 function boundedRequestId(requestId: string): string {

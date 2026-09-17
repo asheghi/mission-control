@@ -1,4 +1,4 @@
-import { registerView } from "../../views.js";
+import { registerView } from "../../views";
 import { DetailView } from "./DetailView";
 
 registerView("detail", {

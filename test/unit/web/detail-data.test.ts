@@ -36,7 +36,7 @@ import {
   participantsFromResponse,
 } from "../../../src/web/features/detail/data";
 import type { DetailComment, DetailHistoryEntry, DetailItem } from "../../../src/web/features/detail/types";
-import { views } from "../../../src/web/views.js";
+import { views } from "../../../src/web/views";
 // Importing the feature is what registers the view; the module itself exports
 // the component, its props type, and the parsers under test.
 import "../../../src/web/features/detail/index";

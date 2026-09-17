@@ -576,7 +576,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       console.error(`workboard: ${error.message}`);
       return 1;
     }
-    console.error(`workboard: unexpected error: ${error instanceof Error ? error.message : String(error)}`);
+    console.error("workboard: unexpected error.");
     return 1;
   }
 }
