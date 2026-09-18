@@ -26,7 +26,7 @@ function Login({ onSignedIn }: LoginProps) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    inputRef.current?.focus();
+    if (typeof window.matchMedia === "function" && window.matchMedia("(pointer: fine)").matches) inputRef.current?.focus();
     return () => {
       requestGeneration.current += 1;
     };
@@ -56,20 +56,31 @@ function Login({ onSignedIn }: LoginProps) {
   };
 
   return (
-    <form class="card login" onSubmit={submit}>
-      <h1>MissionControl</h1>
-      <div class="hint">Ask an administrator to run: workboard token --for &lt;participant&gt;</div>
-      <input
-        ref={inputRef}
-        type="password"
-        name="api-token"
-        aria-label="MissionControl API token"
-        placeholder="Paste your API token (wb_…)"
-        autoComplete="off"
-      />
-      <div class="error" role="alert" aria-live="assertive">{error}</div>
-      <button class="primary" disabled={busy}>Sign in</button>
-    </form>
+    <div class="auth-shell">
+      <div class="auth-brand" aria-hidden="true">
+        <span class="brand-mark"><span /><span /><span /></span>
+        <span>MissionControl</span>
+      </div>
+      <form class="card login" onSubmit={submit}>
+        <div class="login-heading">
+          <p class="eyebrow">Operational workspace</p>
+          <h1>Sign in to your workboard</h1>
+          <p>Use the access token issued for your participant account.</p>
+        </div>
+        <label for="api-token">Access token</label>
+        <input
+          id="api-token"
+          ref={inputRef}
+          type="password"
+          name="api-token"
+          placeholder="Paste your token"
+          autoComplete="off"
+        />
+        <div class="login-help">Need access? Ask an administrator to create a participant token.</div>
+        <div class="error" role="alert" aria-live="assertive">{error}</div>
+        <button class="primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+      </form>
+    </div>
   );
 }
 

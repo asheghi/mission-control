@@ -1,6 +1,15 @@
 import { useEffect, useRef } from "preact/hooks";
 import type { ListItem, ListState } from "./types";
 
+// Mirrors BOARD_COLUMN_LABELS so the same status never reads differently in the
+// list than it does on the board column it came from.
+const STATUS_LABELS: Readonly<Record<string, string>> = {
+  todo: "To do",
+  doing: "Doing",
+  blocked: "Blocked",
+  done: "Done",
+};
+
 interface SelectionBarProps {
   list: ListState;
 }
@@ -55,10 +64,10 @@ export function FilterBar({ list }: FilterBarProps) {
           onChange={(event) => list.setFilter("status", event.currentTarget.value, true)}
         >
           <option value="">All statuses</option>
-          <option value="todo">todo</option>
-          <option value="doing">doing</option>
-          <option value="blocked">blocked</option>
-          <option value="done">done</option>
+          <option value="todo">To do</option>
+          <option value="doing">Doing</option>
+          <option value="blocked">Blocked</option>
+          <option value="done">Done</option>
         </select>
       </label>
       <label>
@@ -126,18 +135,18 @@ function ItemRow({ item, list }: { item: ListItem; list: ListState }) {
           <span class="sr-only">Select work item #{item.id}</span>
         </label>
       </td>
-      <td class="muted"><a class="list-item-id" href={`#/item/${item.id}`}>#{item.id}</a></td>
-      <td><a class="list-item-title" href={`#/item/${item.id}`}>{item.title}</a></td>
-      <td><span class="chip">{item.status}</span></td>
-      <td><span class={`chip p${item.priority}`}>P{item.priority}</span></td>
-      <td>
+      <td class="muted" data-label="ID"><a class="list-item-id" href={`#/item/${item.id}`}>#{item.id}</a></td>
+      <td data-label="Title"><a class="list-item-title" href={`#/item/${item.id}`}>{item.title}</a></td>
+      <td data-label="Status"><span class={`chip status-chip status-${item.status}`}>{STATUS_LABELS[item.status] ?? item.status}</span></td>
+      <td data-label="Priority"><span class={`chip p${item.priority}`}>P{item.priority}</span></td>
+      <td data-label="Assignee">
         {item.assignee === null
           ? "—"
           : item.assignee.kind === "agent"
             ? `${item.assignee.name} (agent)`
             : item.assignee.name}
       </td>
-      <td>
+      <td data-label="Labels">
         <div class="list-labels">
           {item.labels.map((label) => <span key={label.id} class="chip label-chip">{label.name}</span>)}
         </div>
@@ -148,6 +157,7 @@ function ItemRow({ item, list }: { item: ListItem; list: ListState }) {
 
 export function ItemTable({ list }: { list: ListState }) {
   const selectAllRef = useRef<HTMLInputElement>(null);
+  const hasFilters = Object.values(list.filters).some((value) => value !== "") || list.searchDraft.trim() !== "";
   const allSelected = list.items.length > 0 && list.items.every((item) => list.selected.has(item.id));
   const someSelected = list.items.some((item) => list.selected.has(item.id));
   useEffect(() => {
@@ -185,10 +195,10 @@ export function ItemTable({ list }: { list: ListState }) {
         <tbody>
           {list.items.map((item) => <ItemRow key={item.id} item={item} list={list} />)}
           {!list.loading && list.items.length === 0 ? (
-            <tr class="list-empty-row"><td colSpan={7}>No work items match these filters.</td></tr>
+            <tr class="list-empty-row"><td colSpan={7}><div class="empty-state"><strong>{hasFilters ? "No work items match these filters." : "No work items yet"}</strong><span>{hasFilters ? "Try broadening or clearing your filters." : "New work will appear here when it is created."}</span></div></td></tr>
           ) : null}
           {list.loading && list.items.length === 0 ? (
-            <tr class="list-empty-row"><td colSpan={7}>Loading work items…</td></tr>
+            <tr class="list-empty-row"><td colSpan={7}><div class="empty-state"><strong>Loading work items…</strong><span>Preparing the current view.</span></div></td></tr>
           ) : null}
         </tbody>
       </table>

@@ -39,18 +39,20 @@ export function DetailView(props: DetailViewProps) {
       <DetailStatus detail={detail} />
       <DetailHeader detail={detail} />
       {/* Visible text only. Announcement is owned by the single polite live
-          region below, so this must not be a live region too — two regions
+          region above, so this must not be a live region too — two regions
           carrying the same message read it to a screen reader twice. */}
-      {detail.notice === "" ? null : <div class="detail-notice muted">{detail.notice}</div>}
+      {detail.notice === "" ? null : <div class="notice-banner detail-notice">{detail.notice}</div>}
       {detail.error === "" ? null : (
         <div class="error-banner" role="alert">{detail.error} <button type="button" onClick={detail.retry}>Retry</button></div>
       )}
-      <FieldControls detail={detail} />
-      <LabelsEditor detail={detail} />
-      <BodyEditor detail={detail} />
-      <CommentComposer detail={detail} />
-      <Comments detail={detail} />
-      <History detail={detail} />
+      <div class="detail-layout">
+        <BodyEditor detail={detail} />
+        <FieldControls detail={detail} />
+        <CommentComposer detail={detail} />
+        <LabelsEditor detail={detail} />
+        <Comments detail={detail} />
+        <History detail={detail} />
+      </div>
     </div>
   );
 }

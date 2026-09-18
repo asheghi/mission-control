@@ -224,7 +224,8 @@ const TYPED_LIST_LABEL_MARKERS = [
   "Select work item #",
   "Work items table",
   "No work items match these filters.",
-  "item(s) loaded",
+  "1 item loaded",
+  " items loaded",
 ] as const;
 
 // The three list failure states, which the hook renders as its own literal text.
@@ -1414,13 +1415,13 @@ describe("typed list bundle (Phase D)", () => {
     // strings survive minification; the object shape is unit-tested at the source
     // level, so this asserts the component path is the one bundled. Board and
     // list sit side by side with identical registration shapes.
-    expect(js).toContain('{kind:"component",title:"List",href:"#/list",component:');
+    expect(js).toContain('{kind:"component",title:"All work",href:"#/list",component:');
     expect(js).toContain('{kind:"component",title:"Board",href:"#/board",component:');
     // The shell's navigation entry for the list is still present.
     expect(js).toContain("#/list");
     // Exactly one registration of the list route: a second one would mean two
     // `list` view definitions competing for the same hash route.
-    expect(occurrences(js, 'title:"List",href:"#/list"')).toBe(1);
+    expect(occurrences(js, 'title:"All work",href:"#/list"')).toBe(1);
   });
 
   test("the legacy list module is not bundled or served", () => {
@@ -1688,7 +1689,7 @@ describe("typed detail bundle (Phase E)", () => {
     // source level, so this asserts the component path is the one bundled. Board,
     // list, and detail now sit side by side with identical registration shapes.
     expect(js).toContain('{kind:"component",title:"Item",href:"#/item",hidden:!0,component:');
-    expect(js).toContain('{kind:"component",title:"List",href:"#/list",component:');
+    expect(js).toContain('{kind:"component",title:"All work",href:"#/list",component:');
     expect(js).toContain('{kind:"component",title:"Board",href:"#/board",component:');
     // The hidden detail route stays reachable from both migrated views.
     expect(js).toContain("#/item/");

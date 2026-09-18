@@ -7,6 +7,15 @@ import type { BodyTab, DetailHistoryEntry, DetailParticipant, DetailState, DiffO
 /** Shown when the participant roster could not be loaded. */
 export const ROSTER_UNAVAILABLE_NOTE = "Some assignment or label options could not be loaded.";
 
+// Mirrors BOARD_COLUMN_LABELS so a status never reads differently here than it
+// does on the board column it came from.
+const STATUS_LABELS: Readonly<Record<string, string>> = {
+  todo: "To do",
+  doing: "Doing",
+  blocked: "Blocked",
+  done: "Done",
+};
+
 function InlineMarkdown({ token }: { token: InlineToken }) {
   if (token.kind === "text") return <>{token.text}</>;
   if (token.kind === "strong") return <strong>{token.text}</strong>;
@@ -77,7 +86,7 @@ export function DetailHeader({ detail }: { detail: DetailState }) {
         </button>
       </div>
       <div class="detail-meta muted">
-        <span class="chip">{item.status}</span>
+        <span class={`chip status-chip status-${item.status}`}>{STATUS_LABELS[item.status] ?? item.status}</span>
         <span>created {formatTime(item.createdAt)}</span>
         {item.closedAt === null ? null : <span>· closed {formatTime(item.closedAt)}</span>}
       </div>
@@ -108,7 +117,7 @@ export function FieldControls({ detail }: { detail: DetailState }) {
           const status = DETAIL_STATUSES.find((candidate) => candidate === event.currentTarget.value);
           if (status !== undefined) detail.patchField({ status });
         }}>
-          {DETAIL_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+          {DETAIL_STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABELS[status] ?? status}</option>)}
         </select>
       </label>
       <label>Priority
@@ -174,6 +183,7 @@ export function LabelsEditor({ detail }: { detail: DetailState }) {
           </span>
         ))}
       </div>
+      {detail.labelNotice === "" ? null : <div class="notice-banner detail-label-notice">{detail.labelNotice}</div>}
       {suggestions.length === 0 ? null : (
         <div class="labels-suggestions" aria-label="Suggested labels">
           {suggestions.map((label) => (
@@ -327,7 +337,7 @@ export function CommentComposer({ detail }: { detail: DetailState }) {
       </div>
       <div class="composer-actions">
         <span class="muted">Ctrl/⌘+Enter to post</span>
-        <button class="primary" type="submit" disabled={detail.commentBusy || detail.commentDraft.trim() === ""}>{detail.commentBusy ? "Posting…" : "Comment"}</button>
+        <button class="primary" type="submit" disabled={detail.commentBusy || detail.commentDraft.trim() === ""}>{detail.commentBusy ? "Posting…" : "Post comment"}</button>
       </div>
     </form>
   );
@@ -366,7 +376,7 @@ function HistoryBody({ entry, expanded, onToggle }: { entry: DetailHistoryEntry;
       <button class="history-entry diff-row" type="button" aria-expanded={expanded} onClick={onToggle}>
         <time class="muted" dateTime={entry.createdAt}>{formatTime(entry.createdAt)}</time>{" "}
         <span class="diff-label">description changed</span>
-        <span class="diff-stat"><span class="diff-stat-add">+{added}</span>{" "}<span class="diff-stat-del">−{removed}</span></span>
+        {expanded ? <span class="diff-stat"><span class="diff-stat-add">+{added}</span>{" "}<span class="diff-stat-del">−{removed}</span></span> : <span class="diff-stat muted">View changes</span>}
         <em class="muted"> — {entry.actorName}</em><span class="diff-caret" aria-hidden="true">{expanded ? "▾" : "▸"}</span>
       </button>
       <pre class="diff-box" hidden={!expanded} tabIndex={0} aria-label={`Description change by ${entry.actorName}`}>

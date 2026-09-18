@@ -76,7 +76,7 @@ export function WorkItemCard({ item, onMove, onDragStart, onDragEnd, dragging, m
         <span class="board-card-refs">
           <span class="muted">#{item.id}</span>
           <span class={`chip comment-chip${count === 0 ? " empty" : ""}`} aria-hidden="true">
-            {count === 0 ? "" : count}
+            {count === 0 ? "" : commentLabel}
           </span>
         </span>
         <span class="board-card-people">
@@ -155,6 +155,7 @@ export function QuickAdd({ status, busy, onAdd }: QuickAddProps) {
 
 interface StatusColumnProps {
   status: WorkStatus;
+  loading: boolean;
   items: readonly BoardItem[];
   movingItems: ReadonlySet<number>;
   quickAddBusy: boolean;
@@ -202,7 +203,13 @@ export function StatusColumn(props: StatusColumnProps) {
         <span class="sr-only">{itemCount}</span>
       </h2>
       <div class="board-cards" data-status={status}>
-        {items.length === 0 ? <div class="hint">No items</div> : items.map((item) => (
+        {props.loading ? (
+          <div class="board-card board-card-skeleton" aria-hidden="true">
+            <span class="skeleton skeleton-chip">Loading</span>
+            <span class="skeleton skeleton-line">Loading work item</span>
+            <span class="skeleton skeleton-line skeleton-line-short">Loading metadata</span>
+          </div>
+        ) : items.length === 0 ? <div class="board-column-empty">No items in this stage</div> : items.map((item) => (
           <WorkItemCard
             key={item.id}
             item={item}
@@ -214,7 +221,7 @@ export function StatusColumn(props: StatusColumnProps) {
           />
         ))}
       </div>
-      <QuickAdd status={status} busy={props.quickAddBusy} onAdd={props.onAdd} />
+      {props.loading ? null : <QuickAdd status={status} busy={props.quickAddBusy} onAdd={props.onAdd} />}
     </section>
   );
 }

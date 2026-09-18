@@ -2,10 +2,18 @@ import { FilterBar, ItemTable, SelectionBar } from "./components";
 import { useList } from "./hooks";
 import type { ListViewProps } from "./types";
 
+function itemCount(count: number): string {
+  return `${count} ${count === 1 ? "item" : "items"}`;
+}
+
+function loadedItemCount(count: number): string {
+  return count === 1 ? "1 item loaded" : `${count} items loaded`;
+}
+
 export function ListView(props: ListViewProps) {
   const list = useList(props);
   const status = list.bulkBusy
-    ? `Updating ${list.selected.size} selected item(s)…`
+    ? `Updating ${itemCount(list.selected.size)}…`
     : list.loading
       ? (list.items.length === 0 ? "Loading work items…" : "Refreshing work items…")
       : list.loadingMore
@@ -29,13 +37,13 @@ export function ListView(props: ListViewProps) {
           {list.error} <button type="button" disabled={list.bulkBusy} onClick={list.retry}>Retry</button>
         </div>
       ) : null}
-      {list.notice !== "" ? <div class="list-notice">{list.notice}</div> : null}
+      {list.notice !== "" ? <div class="notice-banner list-notice">{list.notice}</div> : null}
 
       <SelectionBar list={list} />
       <ItemTable list={list} />
 
       <div class="list-footer">
-        <span class="muted">{list.items.length} item(s) loaded</span>
+        <span class="muted">{loadedItemCount(list.items.length)}</span>
         {list.canLoadMore ? (
           <button type="button" disabled={list.loading || list.loadingMore || list.bulkBusy} onClick={list.loadMore}>
             {list.loadingMore ? "Loading…" : "Load more"}

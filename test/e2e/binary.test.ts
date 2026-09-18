@@ -98,7 +98,8 @@ const TYPED_LIST_LABEL_MARKERS = [
   "Select work item #",
   "Work items table",
   "No work items match these filters.",
-  "item(s) loaded",
+  "1 item loaded",
+  " items loaded",
 ] as const;
 
 // Source-level signatures of the legacy `src/web/list.js` module. Their presence
@@ -267,6 +268,11 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
     }
     const dir = mkdtempSync(join(tmpdir(), "wb-binary-"));
     const dataDir = join(dir, "wb_data");
+    // Tracked outside the try so a failing assertion cannot leak a listening
+    // server. Previously a throw before the graceful-shutdown step left the
+    // spawned process running, and repeated failures piled up servers that
+    // loaded the machine until this test timed out for unrelated reasons.
+    let killServer: (() => Promise<void>) | null = null;
     try {
       expect(run(["--version"], dir).stdout.trim()).toBe("0.1.0");
 
@@ -290,19 +296,27 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
         stderr: "pipe",
         stdin: "ignore",
       });
+      killServer = async () => {
+        server.kill("SIGKILL");
+        await server.exited;
+      };
       const reader = server.stderr.getReader();
       let stderrText = "";
       const deadline = Date.now() + 10_000;
       let baseUrl: string | null = null;
       while (Date.now() < deadline && baseUrl === null) {
+        // The timeout sentinel must be distinguishable from a real stream end.
+        // Resolving it as `{ done: true }` made the loop treat a slow first
+        // chunk as end-of-stream and give up before the server had printed its
+        // URL, so this test failed intermittently on a loaded machine.
         const chunk = await Promise.race([
           reader.read(),
-          new Promise<{ done: true }>((resolve) => setTimeout(() => resolve({ done: true }), 250)),
+          new Promise<{ timedOut: true }>((resolve) => setTimeout(() => resolve({ timedOut: true }), 250)),
         ]);
         if ("value" in chunk && chunk.value !== undefined) stderrText += new TextDecoder().decode(chunk.value);
         const match = stderrText.match(/listening on (http:\/\/\S+)/);
         if (match?.[1] !== undefined) baseUrl = match[1];
-        else if (chunk.done) break;
+        else if ("done" in chunk && chunk.done) break;
       }
       if (baseUrl === null) throw new Error(`serve never announced its URL: ${stderrText}`);
       expect(baseUrl).toStartWith("http://");
@@ -479,10 +493,10 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
 
       // Board, list, and detail are registered side by side with the same
       // component shape, and each route is registered exactly once.
-      expect(bundleSource).toContain('{kind:"component",title:"List",href:"#/list",component:');
+      expect(bundleSource).toContain('{kind:"component",title:"All work",href:"#/list",component:');
       expect(bundleSource).toContain('{kind:"component",title:"Board",href:"#/board",component:');
       expect(bundleSource).toContain('{kind:"component",title:"Item",href:"#/item",hidden:!0,component:');
-      expect(bundleSource.split('title:"List",href:"#/list"').length - 1).toBe(1);
+      expect(bundleSource.split('title:"All work",href:"#/list"').length - 1).toBe(1);
       // Phase E migrated the last legacy view, so no registration carries a
       // `mount` any more. That absence is what proves the checks below are
       // testing for the legacy modules' signatures rather than for `mount`.
@@ -696,8 +710,12 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       server.kill("SIGTERM");
       await server.exited;
       expect(server.exitCode).toBe(0);
+      killServer = null;
       writeFileSync(join(dir, "done"), "");
     } finally {
+      // A server that never reached the graceful-shutdown step is still
+      // listening; kill it so one failure cannot degrade later runs.
+      if (killServer !== null) await killServer();
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);

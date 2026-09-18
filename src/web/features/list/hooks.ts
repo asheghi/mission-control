@@ -13,6 +13,10 @@ export const LIST_FILTER_ERROR = "Some filter options could not be loaded.";
 export const LIST_DATA_ERROR = "Workboard returned list data in an unexpected format.";
 export const LIST_PAGINATION_ERROR = "Could not load more work items because pagination did not advance.";
 
+function itemCount(count: number): string {
+  return `${count} ${count === 1 ? "item" : "items"}`;
+}
+
 interface ApiResponse {
   readonly data: unknown;
   readonly meta?: unknown;
@@ -269,7 +273,7 @@ export function useList({ refreshGeneration, onAuthenticationFailure }: ListView
     const ids = [...selectedRef.current];
     setBulkBusy(true);
     setError("");
-    setNotice(`Updating ${ids.length} item(s)…`);
+    setNotice(`Updating ${itemCount(ids.length)}…`);
     void Promise.allSettled(ids.map((id) => api.updateItem(id, { assigneeId: participantId }))).then((results) => {
       if (!active()) return;
       const terminal = results.find((result) => result.status === "rejected" && isTerminalAuthError(result.reason));
@@ -279,7 +283,7 @@ export function useList({ refreshGeneration, onAuthenticationFailure }: ListView
       }
       const failed = results.filter((result) => result.status === "rejected").length;
       setNotice(failed === 0
-        ? `Updated ${ids.length} item(s).`
+        ? `Updated ${itemCount(ids.length)}.`
         : `${failed} of ${ids.length} updates failed. The list was refreshed to show saved changes.`);
       publishSelection(new Set());
       scheduleRefresh(true, false);

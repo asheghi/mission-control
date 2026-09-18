@@ -3,7 +3,9 @@ import { ListView } from "./ListView";
 
 registerView("list", {
   kind: "component",
-  title: "List",
+  // Matches the page heading in ListView so the nav item and the screen it
+  // opens never disagree about what the user is looking at.
+  title: "All work",
   href: "#/list",
   component: ListView,
 });

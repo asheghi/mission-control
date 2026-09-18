@@ -407,7 +407,7 @@ describe("the list view registration", () => {
     // than the legacy `mount` path; `component` is the renderer itself.
     expect(entry?.kind).toBe("component");
     expect(typeof (entry as { component?: unknown } | undefined)?.component).toBe("function");
-    expect(entry?.title).toBe("List");
+    expect(entry?.title).toBe("All work");
     expect(entry?.href).toBe("#/list");
     // So the shell's hash router resolves `#/list` to this entry.
     expect(Object.values(views).some((candidate) => candidate.href === "#/list")).toBe(true);

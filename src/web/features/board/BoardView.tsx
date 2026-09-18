@@ -65,12 +65,12 @@ export function BoardView(props: BoardViewProps) {
         </div>
       ) : null}
 
-      {!board.loading ? (
-        <div class="board" ref={boardRef}>
+      <div class="board" ref={boardRef} aria-busy={board.loading}>
           {BOARD_STATUSES.map((status) => (
             <StatusColumn
               key={status}
               status={status}
+              loading={board.loading}
               items={board.items.filter((item) => item.status === status)}
               movingItems={board.movingItems}
               quickAddBusy={board.quickAddBusy.has(status)}
@@ -86,8 +86,7 @@ export function BoardView(props: BoardViewProps) {
               onDropTarget={setDropTarget}
             />
           ))}
-        </div>
-      ) : null}
+      </div>
     </>
   );
 }
