@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "agent-workboard",
+      "name": "mission-control",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.30.0",
         "preact": "10.27.2",

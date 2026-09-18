@@ -319,7 +319,7 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       expect(shellHtml).toContain('src="/assets/app.js"');
       expect(shellHtml).toContain('href="/assets/styles.css"');
       expect(shellHtml.match(/<script\b/g)?.length).toBe(1);
-      expect(shellHtml).toContain("<title>Workboard</title>");
+      expect(shellHtml).toContain("<title>MissionControl</title>");
       const shellReferences = [...shellHtml.matchAll(/(?:href|src)="([^"]*)"/g)].map((match) => match[1]!);
       expect(shellReferences.filter((value) => !value.startsWith("data:")).sort()).toEqual([
         "/assets/app.js",
@@ -374,14 +374,14 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       const bundleSource = await bundle.text();
       // Phase B: the Preact application shell is compiled in — branding, the
       // labeled primary navigation, sign-out, and the live status indicator.
-      expect(bundleSource).toContain("Workboard");
-      expect(bundleSource).toContain("Workboard home");
+      expect(bundleSource).toContain("MissionControl");
+      expect(bundleSource).toContain("MissionControl home");
       expect(bundleSource).toContain("Primary navigation");
       expect(bundleSource).toContain("Sign out");
       expect(bundleSource).toContain("live-indicator");
       // It renders into the single #app host, and the live feed is the REST
       // event stream with the token kept in browser storage.
-      expect(bundleSource).toContain("Workboard application host is missing");
+      expect(bundleSource).toContain("MissionControl application host is missing");
       expect(bundleSource).toContain("api/events");
       expect(bundleSource).toContain("localStorage");
       expect(bundleSource).toContain("sessionStorage");

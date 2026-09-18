@@ -8,7 +8,7 @@ function TopLevelErrorBoundary() {
     return (
       <main class="content">
         <div class="error-banner" role="alert">
-          <p>Workboard could not render this page.</p>
+          <p>MissionControl could not render this page.</p>
           <button type="button" onClick={resetError}>Retry</button>
         </div>
       </main>

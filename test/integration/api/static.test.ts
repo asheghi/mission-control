@@ -523,7 +523,7 @@ describe("static web shell", () => {
     // placeholder host from the Phase A marker build.
     expect(html).not.toContain("preact-marker");
     expect(html).not.toContain("phase-a");
-    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain("<title>MissionControl</title>");
 
     // Every href/src is a fixed path — no third-party origin and no
     // per-deploy hashed filename the server could not serve. The one inline
@@ -578,14 +578,14 @@ describe("static web shell", () => {
 
       // Phase B: the Preact application shell is compiled in — branding, the
       // labeled primary navigation, sign-out, and the live status indicator.
-      expect(servedAppJs).toContain("Workboard");
-      expect(servedAppJs).toContain("Workboard home");
+      expect(servedAppJs).toContain("MissionControl");
+      expect(servedAppJs).toContain("MissionControl home");
       expect(servedAppJs).toContain("Primary navigation");
       expect(servedAppJs).toContain("Sign out");
       expect(servedAppJs).toContain("live-indicator");
       // The shell is a Preact render into the single host element.
       expect(servedAppJs).toContain("getElementById");
-      expect(servedAppJs).toContain("Workboard application host is missing");
+      expect(servedAppJs).toContain("MissionControl application host is missing");
       // Live updates still come from the REST event stream, and the token
       // survives restarts through browser storage.
       expect(servedAppJs).toContain("api/events");
@@ -945,7 +945,7 @@ describe("static web shell", () => {
       // entrypoint: it renders into #app and never loads a second script.
       const bundle = await fetch(`${server.url}/assets/app.js`);
       const source = await bundle.text();
-      expect(source).toContain("Workboard application host is missing");
+      expect(source).toContain("MissionControl application host is missing");
       expect(source).not.toContain("preact-marker");
       // The old shell's top-level bootstrap (a bare `render()` call at module
       // scope with a hashchange listener) is not the bundle's entrypoint.
@@ -1280,12 +1280,12 @@ describe("typed board bundle (Phase C)", () => {
     const html = STATIC_ASSETS["/"]!.body;
 
     // The Phase B branding contract is unchanged by Phase C.
-    expect(js).toContain("Workboard");
-    expect(js).toContain("Workboard home");
+    expect(js).toContain("MissionControl");
+    expect(js).toContain("MissionControl home");
     expect(js).toContain("Primary navigation");
     expect(js).toContain("Sign out");
     expect(js).toContain("live-indicator");
-    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain("<title>MissionControl</title>");
     expect(html).toContain('id="app"');
 
     // And the Phase A placeholder shell is still absent.
@@ -1519,12 +1519,12 @@ describe("typed list bundle (Phase D)", () => {
     const html = STATIC_ASSETS["/"]!.body;
 
     // The Phase B branding contract is unchanged by Phase D.
-    expect(js).toContain("Workboard");
-    expect(js).toContain("Workboard home");
+    expect(js).toContain("MissionControl");
+    expect(js).toContain("MissionControl home");
     expect(js).toContain("Primary navigation");
     expect(js).toContain("Sign out");
     expect(js).toContain("live-indicator");
-    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain("<title>MissionControl</title>");
     expect(html).toContain('id="app"');
 
     // And the Phase A placeholder shell is still absent.
@@ -1812,12 +1812,12 @@ describe("typed detail bundle (Phase E)", () => {
     const html = STATIC_ASSETS["/"]!.body;
 
     // The Phase B branding contract is unchanged by Phase E.
-    expect(js).toContain("Workboard");
-    expect(js).toContain("Workboard home");
+    expect(js).toContain("MissionControl");
+    expect(js).toContain("MissionControl home");
     expect(js).toContain("Primary navigation");
     expect(js).toContain("Sign out");
     expect(js).toContain("live-indicator");
-    expect(html).toContain("<title>Workboard</title>");
+    expect(html).toContain("<title>MissionControl</title>");
     expect(html).toContain('id="app"');
 
     // And the Phase A placeholder shell is still absent.

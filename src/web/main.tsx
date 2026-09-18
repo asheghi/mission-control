@@ -7,6 +7,6 @@ import { App } from "./app";
 
 const app = document.getElementById("app");
 
-if (app === null) throw new Error("Workboard application host is missing");
+if (app === null) throw new Error("MissionControl application host is missing");
 
 render(<App />, app);

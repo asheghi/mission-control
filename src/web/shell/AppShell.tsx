@@ -57,13 +57,13 @@ function Login({ onSignedIn }: LoginProps) {
 
   return (
     <form class="card login" onSubmit={submit}>
-      <h1>Workboard</h1>
+      <h1>MissionControl</h1>
       <div class="hint">Ask an administrator to run: workboard token --for &lt;participant&gt;</div>
       <input
         ref={inputRef}
         type="password"
         name="api-token"
-        aria-label="Workboard API token"
+        aria-label="MissionControl API token"
         placeholder="Paste your API token (wb_…)"
         autoComplete="off"
       />
@@ -192,9 +192,9 @@ export function AppShell() {
     <>
       <a class="skip-link" href="#content" onClick={skipToContent}>Skip to content</a>
       <header class="topbar">
-        <a class="brand" href="#/board" aria-label="Workboard home">
+        <a class="brand" href="#/board" aria-label="MissionControl home">
           <span class="brand-mark" aria-hidden="true"><span /><span /><span /></span>
-          <span>Workboard</span>
+          <span>MissionControl</span>
         </a>
         <nav aria-label="Primary navigation">
           {navEntries.map((entry, index) => (
