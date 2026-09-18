@@ -539,6 +539,14 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     await queueTitle().catch(() => undefined);
   }, [active, id, queueTitle]);
 
+  // Mirrors flushTitle. The description debounce is longer than the title's, so
+  // without this a description typed just before navigating away was still
+  // sitting in its timer when the view unmounted and was discarded.
+  const flushBody = useCallback(async (): Promise<void> => {
+    if (id === null || !active()) return;
+    await queueBody().catch(() => undefined);
+  }, [active, id, queueBody]);
+
   const setTitleDraft = useCallback((value: string): void => {
     // Kept inside the server's own bounds: `titleSchema` is a trimmed 1-256
     // character string, so a value the control cannot send must not be typed
@@ -1002,6 +1010,7 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     flushTitle,
     setTitleFocused: (focused) => { titleFocusedRef.current = focused; },
     setBodyDraft,
+    flushBody,
     setBodyFocused: (focused) => { bodyFocusedRef.current = focused; },
     setBodyTab,
     patchField,

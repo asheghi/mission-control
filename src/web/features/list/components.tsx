@@ -132,7 +132,6 @@ function ItemRow({ item, list }: { item: ListItem; list: ListState }) {
             disabled={list.bulkBusy}
             onChange={(event) => list.toggleSelected(item.id, event.currentTarget.checked)}
           />
-          <span class="sr-only">Select work item #{item.id}</span>
         </label>
       </td>
       <td class="muted" data-label="ID"><a class="list-item-id" href={`#/item/${item.id}`}>#{item.id}</a></td>
@@ -181,7 +180,6 @@ export function ItemTable({ list }: { list: ListState }) {
                   disabled={list.bulkBusy || list.items.length === 0}
                   onChange={(event) => list.toggleAll(event.currentTarget.checked)}
                 />
-                <span class="sr-only">Select all loaded work items</span>
               </label>
             </th>
             <th scope="col">ID</th>

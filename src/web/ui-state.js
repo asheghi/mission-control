@@ -417,9 +417,13 @@ export function createSerialQueue(invoke, { onError = null } = {}) {
 
 /**
  * The indicator's presentation facts. A status is never colour alone: the
- * element carries visible text ("Live" / "Live · reconnecting") plus an
+ * element carries visible text ("Live" / "Offline · reconnecting") plus an
  * accessible description, so a screen reader (or a greyscale display) is told
  * the same thing the colour is.
+ *
+ * The label itself has to change, not just the subtitle: narrow layouts hide
+ * the subtitle, which left the dot's colour as the only difference between a
+ * connected and a dropped feed on a phone.
  */
 export function liveIndicatorState(connected) {
   return connected
@@ -431,7 +435,7 @@ export function liveIndicatorState(connected) {
         description: "Live updates connected",
       }
     : {
-        label: "Live",
+        label: "Offline",
         subtitle: "reconnecting",
         title: "Live updates disconnected — reconnecting",
         connection: "reconnecting",

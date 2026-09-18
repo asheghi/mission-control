@@ -30,8 +30,13 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 /* Checkboxes and radios keep their intrinsic size: forcing the control height
    and full width onto them produced a 40px-tall box that inflated table header
    rows and sat visibly off-centre. Their hit area is owned by the wrapping
-   label (.checkbox-hit-area). */
-input:not([type="checkbox"]):not([type="radio"]),
+   label (.checkbox-hit-area).
+   The base selector stays at plain `input` specificity on purpose. The
+   `:not([type=checkbox]):not([type=radio])` chain this replaced scored 0,2,1
+   and silently outranked the mobile `min-height: 2.75rem` rule, so text inputs
+   stayed 40px tall next to 44px buttons and selects on touch layouts. The
+   attribute selector below is deliberately more specific, so it still wins. */
+input,
 select,
 textarea {
   width: 100%;

@@ -142,6 +142,7 @@ export interface DetailState {
   readonly flushTitle: () => Promise<void>;
   readonly setTitleFocused: (focused: boolean) => void;
   readonly setBodyDraft: (value: string) => void;
+  readonly flushBody: () => Promise<void>;
   readonly setBodyFocused: (focused: boolean) => void;
   readonly setBodyTab: (tab: BodyTab) => void;
   readonly patchField: (patch: { status?: WorkStatus; priority?: Priority; assigneeId?: number | null }) => void;

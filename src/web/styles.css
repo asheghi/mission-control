@@ -71,9 +71,18 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .comment-chip { font-variant-numeric: tabular-nums; }
 .comment-chip.empty { display: none; }
 .chip.agent-chip { color: var(--wb-color-done-fg); border-color: var(--wb-color-done-muted); background: var(--wb-color-done-subtle); text-transform: lowercase; }
+/* Priority reads as an ordinal heat ramp: warm colours for the two urgent
+   levels, then stepping down through neutral emphasis. P3 deliberately does not
+   use the success colour — green already means "Done" on this board, so a
+   low-priority item must not look like a finished one — and P2, the default
+   level, previously had no rule at all and rendered as an unstyled chip.
+   P2 uses the muted foreground, not the default one: `fg-default` is near-white
+   in the dark theme, which made the middle priority the loudest chip of the
+   four and inverted the ramp. */
 .chip.p0 { color: var(--wb-color-danger-fg); border-color: var(--wb-color-danger-muted); background: var(--wb-color-danger-subtle); }
 .chip.p1 { color: var(--wb-color-attention-fg); border-color: var(--wb-color-attention-muted); background: var(--wb-color-attention-subtle); }
-.chip.p3 { color: var(--wb-color-success-fg); border-color: var(--wb-color-success-muted); background: var(--wb-color-success-subtle); }
+.chip.p2 { color: var(--wb-color-fg-muted); border-color: var(--wb-color-neutral-emphasis); background: var(--wb-color-canvas-subtle); }
+.chip.p3 { color: var(--wb-color-fg-muted); border-color: var(--wb-color-border-muted); background: transparent; }
 .label-chip { color: var(--wb-color-accent-fg); border-color: var(--wb-color-accent-muted); background: var(--wb-color-accent-subtle); }
 .detail-labels { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
 .labels-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -130,7 +139,6 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .detail-page-title { width: 100%; margin: 0; font-size: 18px; line-height: 1.25; }
 .detail-title-input { min-width: 10rem; flex: 1 1 16rem; margin: -5px -8px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; color: var(--wb-color-fg-default); font-size: 26px; line-height: 1.25; font-weight: 600; }
 .detail-title-input:hover { border-color: var(--wb-color-border-default); }
-.detail-title-input:focus-visible { border-color: var(--wb-color-accent-fg); }
 .detail-title-input[aria-invalid="true"] { border-color: var(--wb-color-danger-muted); }
 .detail-save-state { min-width: 64px; color: var(--wb-color-fg-muted); font-size: 12px; text-align: right; }
 .detail-meta { margin-top: -10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; }
@@ -262,6 +270,14 @@ main.content { padding-top: var(--wb-space-8); }
 .list-table th:last-child { border-top-right-radius: var(--wb-radius-medium); }
 .list-table td { padding-block: var(--wb-space-3); }
 .list-item-title { line-height: var(--wb-line-height-tight); }
+/* The card title, row links, and breadcrumb are the primary way into an item,
+   so they keep a real target at every width. Below 640px the mobile rules take
+   over; on desktop these were only ~16-23px, under the 24px minimum. */
+.board-card-title,
+.list-item-id,
+.list-item-title,
+.breadcrumb { min-height: 1.5rem; display: inline-flex; align-items: center; }
+.list-item-id { min-width: 1.5rem; justify-content: center; }
 .status-chip { font-weight: var(--wb-font-weight-semibold); }
 .status-doing { color: var(--wb-color-accent-fg); border-color: var(--wb-color-accent-muted); background: var(--wb-color-accent-subtle); }
 .status-blocked { color: var(--wb-color-attention-fg); border-color: var(--wb-color-attention-muted); background: var(--wb-color-attention-subtle); }
@@ -327,8 +343,11 @@ main.content { padding-top: var(--wb-space-8); }
   .login { padding: var(--wb-space-6); }
 
   .board {
-    width: calc(100vw - var(--wb-space-3));
-    margin-inline-end: calc(var(--wb-space-3) * -1);
+    /* Bleed to the viewport edges from the parent's padding rather than from
+       100vw: 100vw counts the scrollbar, so in a narrow desktop window the
+       board came out wider than the viewport. */
+    width: auto;
+    margin-inline: calc(var(--wb-space-3) * -1);
     padding-inline-end: var(--wb-space-3);
     display: grid;
     grid-auto-flow: column;
@@ -340,6 +359,12 @@ main.content { padding-top: var(--wb-space-8); }
     scroll-padding-inline: var(--wb-space-1);
     scroll-snap-type: inline mandatory;
     scrollbar-width: thin;
+    /* Required, not cosmetic. The lane grid paints wider than the board, and
+       without paint containment that overflow escaped the board's own scroll
+       container and made the whole document horizontally scrollable — panning
+       the page right slid the entire UI, topbar included, off screen. Note
+       that `overflow-x: hidden` on the board does not prevent this. */
+    contain: paint;
   }
   .board-column { min-height: 25rem; scroll-snap-align: start; }
   .board-card { cursor: default; }
@@ -358,6 +383,11 @@ main.content { padding-top: var(--wb-space-8); }
   .list-table tr { position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: var(--wb-space-2) var(--wb-space-3); padding: var(--wb-space-4); border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-medium); background: var(--wb-color-surface-raised); box-shadow: var(--wb-shadow-small); }
   .list-table td { display: block; padding: 0; border: 0; }
   .list-table td::before { content: attr(data-label); display: block; color: var(--wb-color-fg-muted); font-size: .6875rem; font-weight: var(--wb-font-weight-semibold); letter-spacing: .04em; text-transform: uppercase; }
+  /* An item with no labels would otherwise print the field name with nothing
+     under it, leaving a dangling "LABELS" heading on every card. The cell is
+     never literally `:empty` — it wraps an (empty) chip list — so match the
+     empty list instead. */
+  .list-table td[data-label="Labels"]:has(> .list-labels:empty) { display: none; }
   .list-table .cell-check { position: absolute; top: var(--wb-space-2); right: var(--wb-space-2); z-index: 1; }
   .list-table td[data-label="ID"] { grid-column: 1; }
   .list-table td[data-label="Title"] { grid-column: 2 / -1; padding-right: var(--wb-space-8); }

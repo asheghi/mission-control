@@ -257,7 +257,7 @@ export function BodyEditor({ detail }: { detail: DetailState }) {
           maxLength={100_000}
           placeholder="Describe the work (markdown-lite: *italic*, **bold**, `code`, links)"
           onFocus={() => detail.setBodyFocused(true)}
-          onBlur={() => detail.setBodyFocused(false)}
+          onBlur={() => { detail.setBodyFocused(false); void detail.flushBody(); }}
           onInput={(event) => detail.setBodyDraft(event.currentTarget.value)} />
       </div>
     </section>

@@ -11,14 +11,35 @@ import type { HttpRouter } from "./router";
 export interface EventRouteDeps {
   readonly broker: WorkboardEventBroker;
   readonly heartbeatMs?: number;
+  /**
+   * Called once per subscription to exempt the streaming response from the
+   * runtime's idle timeout (Bun: `server.timeout(request, 0)`).
+   *
+   * A live feed is idle by definition, so without this the runtime closes it
+   * mid-stream — see DEFAULT_HEARTBEAT_MS.
+   */
+  readonly disableIdleTimeout?: (request: Request) => void;
 }
 
-export const DEFAULT_HEARTBEAT_MS = 15_000;
+/**
+ * A heartbeat only helps while it is shorter than the runtime's idle timeout,
+ * because the timeout closes the stream before the first heartbeat otherwise.
+ * Bun's default idle timeout is 10s, so a 15s heartbeat was too slow to ever
+ * fire: every idle subscription was torn down at ~12s, which surfaced in the
+ * browser as `net::ERR_INCOMPLETE_CHUNKED_ENCODING` and a "reconnecting"
+ * flicker. Keep this comfortably below that default as well as asking the
+ * runtime to exempt the response outright.
+ */
+export const DEFAULT_HEARTBEAT_MS = 5_000;
 
 export function registerEventsRoute(router: HttpRouter, deps: EventRouteDeps): void {
   router.add("GET", "/api/events", (ctx) => {
     const heartbeatMs = deps.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
     const encoder = new TextEncoder();
+
+    // Exempt this one response from the runtime's idle timeout. The stream is
+    // idle between events, which is exactly the state the timeout reaps.
+    deps.disableIdleTimeout?.(ctx.request);
 
     let unsubscribe: () => void = () => {};
     let heartbeat: ReturnType<typeof setInterval> | undefined;

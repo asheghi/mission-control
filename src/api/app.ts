@@ -31,6 +31,11 @@ export interface ApiHandlerDependencies {
   readonly clock?: Clock;
   readonly maxBodyBytes?: number;
   readonly heartbeatMs?: number;
+  /**
+   * Exempts a streaming response from the runtime's idle timeout. Wired by the
+   * server process; absent in tests and embedding hosts that have no timeout.
+   */
+  readonly disableIdleTimeout?: (request: Request) => void;
   /** Embedded web shell, keyed by path (e.g. "/", "/assets/app.js"). */
   readonly staticAssets?: Record<string, StaticAsset>;
   /**
@@ -68,6 +73,7 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
   registerEventsRoute(router, {
     broker: deps.broker,
     ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),
+    ...(deps.disableIdleTimeout !== undefined ? { disableIdleTimeout: deps.disableIdleTimeout } : {}),
   });
 
   return async (request: Request) => {

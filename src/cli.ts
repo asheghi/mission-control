@@ -339,14 +339,19 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
     const clock: Clock = systemClock;
     const broker = new WorkboardEventBroker(clock);
     const service = new WorkboardService(db, clock, broker);
+    // The handler is built before Bun.serve returns, so hold the server in a
+    // mutable binding: the SSE route calls back into it to exempt its streaming
+    // response from the idle timeout that would otherwise end a live feed.
+    let server: ReturnType<typeof Bun.serve> | undefined;
     const handler = createApiHandler({
       service,
       broker,
       authenticate: (credential, now) => authenticate(db, credential, now),
       clock,
       staticAssets: STATIC_ASSETS,
+      disableIdleTimeout: (request) => server?.timeout(request, 0),
     });
-    const server = Bun.serve({ hostname: host, port, fetch: handler });
+    server = Bun.serve({ hostname: host, port, fetch: handler });
     console.error(`workboard listening on http://${host}:${server.port}`);
     console.error(`  REST:  http://${host}:${server.port}/api/health`);
     console.error(`  MCP:   http://${host}:${server.port}/mcp`);
