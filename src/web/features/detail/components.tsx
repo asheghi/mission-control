@@ -1,5 +1,5 @@
 import type { ComponentChildren } from "preact";
-import { useMemo, useRef } from "preact/hooks";
+import { useMemo, useRef, useState } from "preact/hooks";
 import { boundDiff, diffLines, formatTime, tokenizeInline } from "./helpers";
 import { DETAIL_PRIORITIES, DETAIL_STATUSES, LABEL_NAME_MAX_LENGTH, LABEL_SET_MAX } from "./types";
 import type { BodyTab, DetailHistoryEntry, DetailParticipant, DetailState, DiffOperation, InlineToken } from "./types";
@@ -159,6 +159,62 @@ export function FieldControls({ detail }: { detail: DetailState }) {
         ) : null}
       </label>
     </fieldset>
+  );
+}
+
+export function Relationships({ detail }: { detail: DetailState }) {
+  const [parentDraft, setParentDraft] = useState("");
+  const [subtaskDraft, setSubtaskDraft] = useState("");
+  const done = detail.subtasks.filter((item) => item.status === "done").length;
+  return (
+    <section class="card detail-relationships" aria-labelledby="detail-relationships-heading" aria-busy={detail.relationshipsBusy}>
+      <div class="relationships-head">
+        <h2 id="detail-relationships-heading">Relationships</h2>
+        <span class="chip">{done}/{detail.subtasks.length} sub-tasks done</span>
+      </div>
+      <div class="relationship-parent">
+        <h3>Parent</h3>
+        {detail.parent === null ? <p class="muted">This is a top-level item.</p> : (
+          <div class="relationship-row">
+            <a href={`#/item/${detail.parent.id}`}>#{detail.parent.id} {detail.parent.title}</a>
+            <button class="button-invisible" type="button" disabled={detail.relationshipsBusy} onClick={() => detail.setParent(null)}>Remove</button>
+          </div>
+        )}
+        {detail.parent === null ? (
+          <form class="relationship-form" onSubmit={(event) => {
+            event.preventDefault();
+            const parentId = Number(parentDraft);
+            if (Number.isSafeInteger(parentId) && parentId > 0) detail.setParent(parentId);
+          }}>
+            <label for="detail-parent-id">Parent item ID</label>
+            <div><input id="detail-parent-id" inputMode="numeric" pattern="[0-9]+" value={parentDraft} placeholder="e.g. 42" disabled={detail.relationshipsBusy} onInput={(event) => setParentDraft(event.currentTarget.value)} /><button type="submit" disabled={detail.relationshipsBusy || !/^[1-9]\d*$/.test(parentDraft)}>Set parent</button></div>
+          </form>
+        ) : null}
+      </div>
+      <div class="relationship-subtasks">
+        <h3>Sub-tasks</h3>
+        {detail.subtasks.length === 0 ? <p class="muted">No sub-tasks yet.</p> : (
+          <ul>{detail.subtasks.map((subtask) => {
+            const descriptionId = `subtask-${subtask.id}-description`;
+            return (
+              <li key={subtask.id} class="relationship-row">
+                <span class={`chip status-chip status-${subtask.status}`} aria-hidden="true">{STATUS_LABELS[subtask.status]}</span>
+                <a href={`#/item/${subtask.id}`} aria-describedby={descriptionId}>#{subtask.id} {subtask.title}</a>
+                <span id={descriptionId} class="sr-only">Status: {STATUS_LABELS[subtask.status]}. Priority P{subtask.priority}.{subtask.assignee === null ? " Unassigned." : ` Assigned to ${subtask.assignee.name}.`}</span>
+              </li>
+            );
+          })}</ul>
+        )}
+        <form class="quick-add relationship-add" onSubmit={(event) => {
+          event.preventDefault();
+          void detail.createSubtask(subtaskDraft).then((created) => { if (created) setSubtaskDraft(""); });
+        }}>
+          <label class="sr-only" for="detail-subtask-title">Add a sub-task</label>
+          <input id="detail-subtask-title" value={subtaskDraft} maxLength={256} placeholder="Add a sub-task…" disabled={detail.relationshipsBusy} onInput={(event) => setSubtaskDraft(event.currentTarget.value)} />
+          <button type="submit" disabled={detail.relationshipsBusy || subtaskDraft.trim() === ""}>Add</button>
+        </form>
+      </div>
+    </section>
   );
 }
 

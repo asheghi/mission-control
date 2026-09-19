@@ -40,6 +40,7 @@ export interface ItemDto {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
+  readonly parentId: number | null;
   readonly labels: LabelDto[];
   readonly commentCount: number;
 }
@@ -113,6 +114,7 @@ export function toItemDto(row: ItemJoinedRow, labels: readonly LabelDto[]): Item
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
+    parentId: row.parent_id,
     labels: [...labels],
     commentCount: row.comment_count,
   };

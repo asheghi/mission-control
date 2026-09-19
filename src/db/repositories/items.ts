@@ -20,6 +20,7 @@ export interface ItemRow {
   readonly created_at: string;
   readonly updated_at: string;
   readonly closed_at: string | null;
+  readonly parent_id: number | null;
 }
 
 /** Item row joined with assignee identity and comment count. */
@@ -50,13 +51,14 @@ export function createItem(
     readonly createdAt: string;
     readonly updatedAt: string;
     readonly closedAt: string | null;
+    readonly parentId: number | null;
   },
 ): ItemRow {
   const row = db
     .query(
-      "INSERT INTO items (title, body, status, priority, assignee_id, created_by, created_at, updated_at, closed_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-        "RETURNING id, title, body, status, priority, assignee_id, created_by, created_at, updated_at, closed_at",
+      "INSERT INTO items (title, body, status, priority, assignee_id, created_by, created_at, updated_at, closed_at, parent_id) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "RETURNING id, title, body, status, priority, assignee_id, created_by, created_at, updated_at, closed_at, parent_id",
     )
     .get(
       input.title,
@@ -68,6 +70,7 @@ export function createItem(
       input.createdAt,
       input.updatedAt,
       input.closedAt,
+      input.parentId,
     );
   return row as ItemRow;
 }
@@ -75,7 +78,7 @@ export function createItem(
 export function getItemById(db: Database, id: number): ItemRow | null {
   const row = db
     .query(
-      "SELECT id, title, body, status, priority, assignee_id, created_by, created_at, updated_at, closed_at " +
+      "SELECT id, title, body, status, priority, assignee_id, created_by, created_at, updated_at, closed_at, parent_id " +
         "FROM items WHERE id = ?",
     )
     .get(id);
@@ -93,6 +96,7 @@ export interface ItemListFilter {
   readonly unassigned?: boolean;
   readonly labelId?: number;
   readonly q?: string;
+  readonly parentId?: number | null;
   readonly limit: number;
   readonly cursor?: string | null;
 }
@@ -126,6 +130,13 @@ export function listItems(
     const pattern = `%${filter.q.replace(/[\\%_]/g, "\\$&")}%`;
     conditions.push("(items.title LIKE ? ESCAPE '\\' OR items.body LIKE ? ESCAPE '\\')");
     params.push(pattern, pattern);
+  }
+  if (filter.parentId !== undefined) {
+    if (filter.parentId === null) conditions.push("items.parent_id IS NULL");
+    else {
+      conditions.push("items.parent_id = ?");
+      params.push(filter.parentId);
+    }
   }
   if (filter.cursor) {
     const cursor = decodeUpdatedAtIdCursor(filter.cursor);
@@ -216,6 +227,7 @@ export interface ItemColumnChanges {
   // Key presence means "set", including null to unassign.
   assigneeId?: number | null;
   closedAt?: string | null;
+  parentId?: number | null;
 }
 
 const ITEM_COLUMNS: Readonly<Record<string, string>> = {
@@ -225,6 +237,7 @@ const ITEM_COLUMNS: Readonly<Record<string, string>> = {
   priority: "priority",
   assigneeId: "assignee_id",
   closedAt: "closed_at",
+  parentId: "parent_id",
 };
 
 export function updateItem(

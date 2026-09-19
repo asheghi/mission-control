@@ -65,7 +65,7 @@ describe("migrate", () => {
     withTempDataDir((dir) => {
       const db = initializeDatabase(dir);
       try {
-        expect(currentSchemaVersion(db)).toBe(1);
+        expect(currentSchemaVersion(db)).toBe(2);
         const tables = tableNames(db);
         for (const expected of [
           "participants",
@@ -90,7 +90,7 @@ describe("migrate", () => {
       const db = initializeDatabase(dir);
       try {
         migrate(db, migrations);
-        expect(currentSchemaVersion(db)).toBe(1);
+        expect(currentSchemaVersion(db)).toBe(2);
       } finally {
         db.close();
       }
@@ -107,7 +107,7 @@ describe("migrate", () => {
 
       const second = initializeDatabase(dir);
       try {
-        expect(currentSchemaVersion(second)).toBe(1);
+        expect(currentSchemaVersion(second)).toBe(2);
         const row = second.query("SELECT name FROM participants WHERE name = 'tester'").get() as
           | { name: string }
           | null;

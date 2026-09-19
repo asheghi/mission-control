@@ -13,7 +13,7 @@ interface LoginProps {
 
 function validCurrentHash(): string {
   const candidate = location.hash;
-  if (candidate === "#/board" || /^#\/list(?:\?.*)?$/.test(candidate) || /^#\/item\/[1-9]\d*$/.test(candidate)) {
+  if (candidate === "#/board" || candidate === "#/backlog" || /^#\/list(?:\?.*)?$/.test(candidate) || /^#\/item\/[1-9]\d*$/.test(candidate)) {
     return candidate;
   }
   return "#/board";

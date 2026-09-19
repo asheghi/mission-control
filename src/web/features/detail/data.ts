@@ -44,7 +44,7 @@ function itemFromValue(value: unknown): DetailItem | null {
   if (!isRecord(value) || !isId(value.id) || typeof value.title !== "string" || typeof value.body !== "string"
     || !isStatus(value.status) || !isPriority(value.priority) || !isTimestamp(value.createdAt)
     || !isTimestamp(value.updatedAt) || (value.closedAt !== null && !isTimestamp(value.closedAt))
-    || !Array.isArray(value.labels)) return null;
+    || (value.parentId !== undefined && value.parentId !== null && !isId(value.parentId)) || !Array.isArray(value.labels)) return null;
   const assignee = value.assignee === null ? null : participantFromValue(value.assignee);
   if (value.assignee !== null && assignee === null) return null;
   const labels: DetailLabel[] = [];
@@ -63,6 +63,7 @@ function itemFromValue(value: unknown): DetailItem | null {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     closedAt: value.closedAt,
+    parentId: value.parentId === undefined ? null : value.parentId,
     labels,
   };
 }
@@ -94,9 +95,18 @@ function historyFromValue(value: unknown): DetailHistoryEntry | null {
 
 export function detailFromResponse(response: unknown): DetailPayload | null {
   if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.comments)
-    || !Array.isArray(response.data.history)) return null;
+    || !Array.isArray(response.data.history)
+    || (response.data.subtasks !== undefined && !Array.isArray(response.data.subtasks))) return null;
   const item = itemFromValue(response.data.item);
-  if (item === null) return null;
+  const parentValue = response.data.parent ?? null;
+  const parent = parentValue === null ? null : itemFromValue(parentValue);
+  if (item === null || (parentValue !== null && parent === null)) return null;
+  const subtasks: DetailItem[] = [];
+  for (const candidate of response.data.subtasks ?? []) {
+    const subtask = itemFromValue(candidate);
+    if (subtask === null) return null;
+    subtasks.push(subtask);
+  }
   const comments: DetailComment[] = [];
   for (const candidate of response.data.comments) {
     const comment = commentFromValue(candidate);
@@ -109,7 +119,7 @@ export function detailFromResponse(response: unknown): DetailPayload | null {
     if (entry === null) return null;
     history.push(entry);
   }
-  return { item, comments, history };
+  return { item, parent, subtasks, comments, history };
 }
 
 export function participantsFromResponse(response: unknown): readonly DetailParticipant[] | null {

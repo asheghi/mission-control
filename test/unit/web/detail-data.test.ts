@@ -141,7 +141,7 @@ describe("detailFromResponse", () => {
     expect(parsed).not.toBeNull();
     // Exactly the three collections the view renders, and nothing carried over
     // from the wire object.
-    expect(Object.keys(parsed!).sort()).toEqual(["comments", "history", "item"]);
+    expect(Object.keys(parsed!).sort()).toEqual(["comments", "history", "item", "parent", "subtasks"]);
     expect(parsed!.item.id).toBe(7);
     expect(parsed!.item.title).toBe("Migrate the detail view");
     expect(parsed!.item.status).toBe("doing");
@@ -271,7 +271,7 @@ describe("detailFromResponse", () => {
     const parsed = detailFromResponse(detailEnvelope());
     const item = parsed!.item as unknown as Record<string, unknown>;
     expect(Object.keys(item).sort()).toEqual(
-      ["assignee", "body", "closedAt", "createdAt", "id", "labels", "priority", "status", "title", "updatedAt"],
+      ["assignee", "body", "closedAt", "createdAt", "id", "labels", "parentId", "priority", "status", "title", "updatedAt"],
     );
     expect(item.commentCount).toBeUndefined();
     expect(item.author).toBeUndefined();
@@ -525,7 +525,7 @@ describe("the accepted view is safe to render", () => {
       expect(Object.prototype.hasOwnProperty.call(value, "injected")).toBe(false);
     }
     expect(Object.keys(item).sort()).toEqual(
-      ["assignee", "body", "closedAt", "createdAt", "id", "labels", "priority", "status", "title", "updatedAt"],
+      ["assignee", "body", "closedAt", "createdAt", "id", "labels", "parentId", "priority", "status", "title", "updatedAt"],
     );
     expect(Object.keys(comment).sort()).toEqual(["author", "body", "createdAt", "id"]);
     expect(Object.keys(entry).sort()).toEqual(["actorName", "createdAt", "field", "id", "newValue", "oldValue"]);

@@ -56,6 +56,7 @@ export interface DetailItem {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
+  readonly parentId: number | null;
   readonly labels: readonly DetailLabel[];
 }
 
@@ -77,6 +78,8 @@ export interface DetailHistoryEntry {
 
 export interface DetailPayload {
   readonly item: DetailItem;
+  readonly parent: DetailItem | null;
+  readonly subtasks: readonly DetailItem[];
   readonly comments: readonly DetailComment[];
   readonly history: readonly DetailHistoryEntry[];
 }
@@ -114,6 +117,8 @@ export interface DetailState {
   readonly item: DetailItem | null;
   readonly comments: readonly DetailComment[];
   readonly history: readonly DetailHistoryEntry[];
+  readonly parent: DetailItem | null;
+  readonly subtasks: readonly DetailItem[];
   readonly participants: readonly DetailParticipant[];
   readonly labels: readonly DetailLabel[];
   readonly loading: boolean;
@@ -136,6 +141,7 @@ export interface DetailState {
   readonly labelsBusy: boolean;
   readonly deleting: boolean;
   readonly fieldsBusy: boolean;
+  readonly relationshipsBusy: boolean;
   readonly expandedHistory: ReadonlySet<number>;
   readonly retry: () => void;
   readonly setTitleDraft: (value: string) => void;
@@ -146,6 +152,8 @@ export interface DetailState {
   readonly setBodyFocused: (focused: boolean) => void;
   readonly setBodyTab: (tab: BodyTab) => void;
   readonly patchField: (patch: { status?: WorkStatus; priority?: Priority; assigneeId?: number | null }) => void;
+  readonly setParent: (parentId: number | null) => void;
+  readonly createSubtask: (title: string) => Promise<boolean>;
   readonly setLabelDraft: (value: string) => void;
   readonly addLabel: (name: string) => void;
   readonly removeLabel: (name: string) => void;

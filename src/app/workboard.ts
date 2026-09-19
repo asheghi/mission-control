@@ -77,6 +77,7 @@ export const createItemInputSchema = z.strictObject({
   body: bodySchema.optional().default(""),
   priority: prioritySchema.optional().default(2),
   assigneeId: positiveIdSchema.nullable().optional(),
+  parentId: positiveIdSchema.nullable().optional(),
   labels: z.array(labelNameSchema).max(20).optional().default([]),
 });
 
@@ -87,6 +88,7 @@ export const updateItemInputSchema = z
     status: workStatusSchema.optional(),
     priority: prioritySchema.optional(),
     assigneeId: positiveIdSchema.nullable().optional(),
+    parentId: positiveIdSchema.nullable().optional(),
     labels: z.array(labelNameSchema).max(20).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Provide at least one field to update.");
@@ -119,6 +121,8 @@ export const myWorkFilterSchema = z.strictObject({
 
 export interface ItemDetailDto {
   readonly item: ItemDto;
+  readonly parent: ItemDto | null;
+  readonly subtasks: readonly ItemDto[];
   readonly comments: readonly CommentDto[];
   readonly history: readonly HistoryEntryDto[];
 }
@@ -184,9 +188,18 @@ export class WorkboardService {
     const row = getItemJoined(this.db, itemId);
     if (row === null) throw new NotFoundError("item", itemId);
     const labels = toLabelDtos(listLabelsForItem(this.db, itemId));
+    const parentRow = row.parent_id === null ? null : getItemJoined(this.db, row.parent_id);
+    const childRows = listItems(this.db, { parentId: itemId, limit: 100 }).items;
+    const relatedIds = [
+      ...(parentRow === null ? [] : [parentRow.id]),
+      ...childRows.map((child) => child.id),
+    ];
+    const relatedLabels = labelsForItems(this.db, relatedIds);
+    const parent = parentRow === null ? null : toItemDto(parentRow, toLabelDtos(relatedLabels.get(parentRow.id) ?? []));
+    const subtasks = childRows.map((child) => toItemDto(child, toLabelDtos(relatedLabels.get(child.id) ?? [])));
     const comments = listComments(this.db, itemId, { limit: DETAIL_COMMENT_LIMIT }).comments.map(toCommentDto);
     const history = listHistory(this.db, itemId, { limit: DETAIL_HISTORY_LIMIT }).entries.map(toHistoryEntryDto);
-    return { item: toItemDto(row, labels), comments, history };
+    return { item: toItemDto(row, labels), parent, subtasks, comments, history };
   }
 
   myWork(actor: Actor, filter: unknown = {}): MyWorkResult {
@@ -224,6 +237,7 @@ export class WorkboardService {
     const now = this.clock.now();
     const itemId = this.db.transaction(() => {
       const assigneeId = this.resolveOptionalAssignee(parsed.assigneeId);
+      const parentId = this.resolveOptionalParent(parsed.parentId);
       const labels = parsed.labels.length > 0 ? this.resolveLabelNames(parsed.labels) : [];
       const row = createItemRow(this.db, {
         title: parsed.title,
@@ -235,6 +249,7 @@ export class WorkboardService {
         createdAt: now,
         updatedAt: now,
         closedAt: null,
+        parentId,
       });
       if (labels.length > 0) setItemLabels(this.db, row.id, labels.map((label) => label.id));
       replaceItemMentions(this.db, row.id, this.mentionIds(parsed.body), now);
@@ -299,6 +314,18 @@ export class WorkboardService {
             field: "assignee",
             oldValue: this.describeAssignee(current.assignee_id),
             newValue: this.describeAssignee(nextAssignee),
+          });
+        }
+      }
+      if (parsed.parentId !== undefined) {
+        const nextParent = this.resolveOptionalParent(parsed.parentId, itemId);
+        if (nextParent !== current.parent_id) {
+          changes.fields.parentId = nextParent;
+          changed.push("parent");
+          changes.entries.push({
+            field: "parent",
+            oldValue: this.describeParent(current.parent_id),
+            newValue: this.describeParent(nextParent),
           });
         }
       }
@@ -448,6 +475,31 @@ export class WorkboardService {
   private describeAssignee(assigneeId: number | null): string {
     if (assigneeId === null) return "(unassigned)";
     return getParticipantById(this.db, assigneeId)?.name ?? "(unassigned)";
+  }
+
+  private resolveOptionalParent(parentId: number | null | undefined, itemId?: number): number | null {
+    if (parentId === undefined || parentId === null) return null;
+    if (itemId !== undefined && parentId === itemId) {
+      throw new ValidationError("An item cannot be its own parent.");
+    }
+    let candidate = getItemById(this.db, parentId);
+    if (candidate === null) throw new NotFoundError("item", parentId);
+    const seen = new Set<number>();
+    while (candidate !== null) {
+      if (itemId !== undefined && candidate.id === itemId) {
+        throw new ValidationError("Item relationships cannot contain a cycle.");
+      }
+      if (seen.has(candidate.id)) throw new ValidationError("Item relationships cannot contain a cycle.");
+      seen.add(candidate.id);
+      candidate = candidate.parent_id === null ? null : getItemById(this.db, candidate.parent_id);
+    }
+    return parentId;
+  }
+
+  private describeParent(parentId: number | null): string {
+    if (parentId === null) return "(none)";
+    const parent = getItemById(this.db, parentId);
+    return parent === null ? "(none)" : `#${parent.id} ${parent.title}`;
   }
 
   private resolveLabelNames(names: readonly string[]): LabelRow[] {

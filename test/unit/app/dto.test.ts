@@ -37,6 +37,7 @@ describe("dto mappers", () => {
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-02T00:00:00.000Z",
       closed_at: null,
+      parent_id: null,
       assignee_name: "bot",
       assignee_kind: "agent",
       comment_count: 2,

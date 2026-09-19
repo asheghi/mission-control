@@ -1,6 +1,7 @@
 import { render } from "preact";
 import "./styles.css";
 import "./features/board";
+import "./features/backlog";
 import "./features/list";
 import "./features/detail";
 import { App } from "./app";

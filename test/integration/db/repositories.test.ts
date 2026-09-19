@@ -42,6 +42,7 @@ function makeItem(
     readonly createdAt?: string;
     readonly updatedAt?: string;
     readonly closedAt?: string | null;
+    readonly parentId?: number | null;
   } = {},
 ) {
   return createItem(db, {
@@ -54,6 +55,7 @@ function makeItem(
     createdAt: overrides.createdAt ?? "2026-01-01T00:00:00.000Z",
     updatedAt: overrides.updatedAt ?? overrides.createdAt ?? "2026-01-01T00:00:00.000Z",
     closedAt: overrides.closedAt ?? null,
+    parentId: overrides.parentId ?? null,
   });
 }
 

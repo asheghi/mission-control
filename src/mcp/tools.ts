@@ -86,12 +86,13 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
     "create_work",
     {
       description:
-        "Create a work item: title (required), optional body, priority (0-3, default 2), assigneeId (participant id or null), and label names.",
+        "Create a work item or sub-task: title (required), optional body, priority (0-3, default 2), assigneeId, parentId, and label names.",
       inputSchema: {
         title: z.string().min(1).max(120),
         body: z.string().max(10_000).optional(),
         priority: z.number().int().min(0).max(3).optional(),
         assigneeId: z.number().int().positive().nullable().optional(),
+        parentId: z.number().int().positive().nullable().optional(),
         labels: z.array(z.string().min(1).max(120)).optional(),
       },
     },
@@ -108,7 +109,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
     "update_work",
     {
       description:
-        "Partially update a work item by id: title, body, status, priority, assigneeId (null unassigns), labels (replaces the set). Only provided fields change.",
+        "Partially update a work item by id: title, body, status, priority, assigneeId, parentId (null detaches), or labels. Only provided fields change.",
       inputSchema: {
         id: idSchema,
         title: z.string().min(1).max(120).optional(),
@@ -116,6 +117,7 @@ export function buildMcpServer(service: WorkboardService, actor: Actor): McpServ
         status: workStatusSchema.optional(),
         priority: z.number().int().min(0).max(3).optional(),
         assigneeId: z.number().int().positive().nullable().optional(),
+        parentId: z.number().int().positive().nullable().optional(),
         labels: z.array(z.string().min(1).max(120)).optional(),
       },
     },

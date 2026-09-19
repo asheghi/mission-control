@@ -597,7 +597,7 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       }
       // Exactly one registration shape remains: `kind: "component"` with a
       // renderer, once per route and no more.
-      expect(bundleSource.split('kind:"component"').length - 1).toBe(3);
+      expect(bundleSource.split('kind:"component"').length - 1).toBe(4);
       // One SSE path and one API client path, unchanged by the deletion.
       expect(bundleSource.split("api/events").length - 1).toBe(1);
 

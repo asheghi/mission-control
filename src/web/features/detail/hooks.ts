@@ -60,6 +60,7 @@ interface DetailApi {
   listParticipants: () => Promise<ApiResponse>;
   listLabels: () => Promise<ApiResponse>;
   updateItem: (id: number, patch: Record<string, unknown>) => Promise<unknown>;
+  createItem: (input: { title: string; parentId: number }) => Promise<unknown>;
   createLabel: (input: { name: string; color: string }) => Promise<unknown>;
   addComment: (id: number, body: string) => Promise<unknown>;
   deleteItem: (id: number) => Promise<unknown>;
@@ -207,6 +208,8 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
   const [item, setItem] = useState<DetailItem | null>(null);
   const [comments, setComments] = useState<DetailState["comments"]>([]);
   const [history, setHistory] = useState<DetailState["history"]>([]);
+  const [parent, setParentState] = useState<DetailItem | null>(null);
+  const [subtasks, setSubtasks] = useState<readonly DetailItem[]>([]);
   const [participants, setParticipants] = useState<readonly DetailParticipant[]>([]);
   const [labels, setLabels] = useState<readonly DetailLabel[]>([]);
   const [selectedLabelNames, setSelectedLabelNames] = useState<readonly string[]>([]);
@@ -227,6 +230,7 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
   const [labelDraft, setLabelDraft] = useState("");
   const [labelsBusy, setLabelsBusy] = useState(false);
   const [fieldsBusy, setFieldsBusy] = useState(false);
+  const [relationshipsBusy, setRelationshipsBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [expandedHistory, setExpandedHistory] = useState<ReadonlySet<number>>(new Set());
 
@@ -321,6 +325,8 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     publishItem(reconcileItem(detail.item, fieldIntentRef.current, participantsRef.current));
     setComments(detail.comments);
     setHistory(detail.history);
+    setParentState(detail.parent);
+    setSubtasks(detail.subtasks);
     if (!titleDirty && !titleFocusedRef.current) {
       titleDraftRef.current = detail.item.title;
       setTitleDraftState(detail.item.title);
@@ -896,6 +902,46 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     });
   }, [active, commentBusy, commentDraft, confirmComment, failAuthentication, id, markApplied, setNotice]);
 
+  // --- relationships ---------------------------------------------------------
+
+  const setParent = useCallback((parentId: number | null): void => {
+    if (id === null || !active() || relationshipsBusy) return;
+    setRelationshipsBusy(true);
+    void api.updateItem(id, { parentId }).then(() => {
+      if (!active()) return;
+      markApplied("item");
+      setNotice(parentId === null ? "Parent removed." : `Parent set to item #${parentId}.`);
+      void refresh(true);
+    }).catch((caught: unknown) => {
+      if (!active() || failAuthentication(caught)) return;
+      setNotice(caught instanceof apiModule.ApiError && caught.status === 400
+        ? caught.message
+        : DETAIL_SAVE_ERROR);
+    }).finally(() => {
+      if (active()) setRelationshipsBusy(false);
+    });
+  }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
+
+  const createSubtask = useCallback(async (title: string): Promise<boolean> => {
+    const value = title.trim();
+    if (id === null || value === "" || !active() || relationshipsBusy) return false;
+    setRelationshipsBusy(true);
+    try {
+      await api.createItem({ title: value, parentId: id });
+      if (!active()) return true;
+      markApplied("item");
+      setNotice("Sub-task added.");
+      await refresh(true);
+      return true;
+    } catch (caught: unknown) {
+      if (!active() || failAuthentication(caught)) return false;
+      setNotice(DETAIL_SAVE_ERROR);
+      return false;
+    } finally {
+      if (active()) setRelationshipsBusy(false);
+    }
+  }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
+
   // --- delete ----------------------------------------------------------------
 
   /** The fixed copy shown when the pending edits could not be sent. */
@@ -1002,9 +1048,9 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
   stopWritesRef.current = [stopWrites];
 
   return {
-    id, item, comments, history, participants, labels, loading, refreshing, notFound, error, notice, announcement,
+    id, item, comments, history, parent, subtasks, participants, labels, loading, refreshing, notFound, error, notice, announcement,
     titleDraft, titleStatus, bodyDraft, bodyStatus, bodyTab, commentDraft, commentBusy, mention,
-    labelDraft, labelNotice, selectedLabelNames, labelsBusy, fieldsBusy, deleting, expandedHistory,
+    labelDraft, labelNotice, selectedLabelNames, labelsBusy, fieldsBusy, relationshipsBusy, deleting, expandedHistory,
     retry: () => void refresh(false),
     setTitleDraft,
     flushTitle,
@@ -1014,6 +1060,8 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     setBodyFocused: (focused) => { bodyFocusedRef.current = focused; },
     setBodyTab,
     patchField,
+    setParent,
+    createSubtask,
     setLabelDraft,
     addLabel,
     removeLabel,

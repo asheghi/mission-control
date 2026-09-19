@@ -173,6 +173,26 @@ describe("WorkboardService items", () => {
     });
   });
 
+  test("creates, reparents, detaches, and protects sub-task relationships", () => {
+    withFixture(({ service, alice }) => {
+      const parent = service.createItem(alice, { title: "Parent" });
+      const child = service.createItem(alice, { title: "Child", parentId: parent.item.id });
+
+      expect(child.item.parentId).toBe(parent.item.id);
+      expect(child.parent?.id).toBe(parent.item.id);
+      expect(service.getItem(alice, parent.item.id).subtasks.map((item) => item.id)).toEqual([child.item.id]);
+      expect(() => service.updateItem(alice, parent.item.id, { parentId: child.item.id })).toThrow(ValidationError);
+      expect(() => service.updateItem(alice, child.item.id, { parentId: child.item.id })).toThrow(ValidationError);
+      expect(() => service.createItem(alice, { title: "Orphan", parentId: 999 })).toThrow(NotFoundError);
+
+      const detached = service.updateItem(alice, child.item.id, { parentId: null });
+      expect(detached.item.parentId).toBeNull();
+      expect(detached.parent).toBeNull();
+      expect(detached.history.some((entry) => entry.field === "parent")).toBe(true);
+      expect(service.getItem(alice, parent.item.id).subtasks).toEqual([]);
+    });
+  });
+
   test("deleteItem removes the item; further access is not found", () => {
     withFixture(({ service, alice }) => {
       const created = service.createItem(alice, { title: "Doomed" });

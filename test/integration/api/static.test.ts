@@ -43,6 +43,7 @@ import { views } from "../../../src/web/views";
 // `src/web/main.tsx` fills it. Importing them here means these tests assert on
 // the registry the shipped bundle actually builds, not an empty one.
 import "../../../src/web/features/board";
+import "../../../src/web/features/backlog";
 import "../../../src/web/features/list";
 import "../../../src/web/features/detail";
 
@@ -787,7 +788,7 @@ describe("static web shell", () => {
     // definition with a real renderer — there is no `mount` registrant left and
     // no `kind` other than "component".
     const entries = Object.entries(views);
-    expect(entries.map(([name]) => name).sort()).toEqual(["board", "detail", "list"]);
+    expect(entries.map(([name]) => name).sort()).toEqual(["backlog", "board", "detail", "list"]);
     for (const [name, entry] of entries) {
       expect(entry.kind, name).toBe("component");
       expect(typeof entry.component, name).toBe("function");
@@ -809,6 +810,7 @@ describe("static web shell", () => {
     // moved and no second client was added, so the suffix below is the contract.
     const apiImporters = sources.filter((source) => /from "[^"]*\/api\.js"/.test(source.text));
     expect(apiImporters.map((source) => source.path).sort()).toEqual([
+      "features/backlog/BacklogView.tsx",
       "features/board/hooks.ts",
       "features/detail/hooks.ts",
       "features/list/hooks.ts",
