@@ -50,13 +50,34 @@ export function groupBacklog(items: readonly BacklogItem[]): readonly BacklogGro
   const byId = new Map(items.map((entry) => [entry.id, entry]));
   const children = new Map<number, BacklogItem[]>();
   const roots: BacklogItem[] = [];
+  const order = (left: BacklogItem, right: BacklogItem) => left.priority - right.priority || right.id - left.id;
+
   for (const entry of items) {
-    if (entry.parentId !== null && byId.has(entry.parentId)) {
+    if (entry.parentId !== null && entry.parentId !== entry.id && byId.has(entry.parentId)) {
       const list = children.get(entry.parentId) ?? [];
       list.push(entry);
       children.set(entry.parentId, list);
     } else roots.push(entry);
   }
-  const order = (left: BacklogItem, right: BacklogItem) => left.priority - right.priority || right.id - left.id;
-  return roots.sort(order).map((entry) => ({ item: entry, children: (children.get(entry.id) ?? []).sort(order) }));
+
+  const included = new Set<number>();
+  const build = (entry: BacklogItem, ancestors: ReadonlySet<number>): BacklogGroup => {
+    included.add(entry.id);
+    const nextAncestors = new Set(ancestors).add(entry.id);
+    return {
+      item: entry,
+      children: (children.get(entry.id) ?? [])
+        .filter((child) => !nextAncestors.has(child.id))
+        .sort(order)
+        .map((child) => build(child, nextAncestors)),
+    };
+  };
+
+  const result = roots.sort(order).map((entry) => build(entry, new Set()));
+  // Keep malformed cyclic relationships visible rather than silently dropping
+  // those items from the backlog. Their first sorted member becomes a root.
+  for (const entry of [...items].sort(order)) {
+    if (!included.has(entry.id)) result.push(build(entry, new Set()));
+  }
+  return result;
 }

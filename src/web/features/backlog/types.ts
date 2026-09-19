@@ -12,7 +12,7 @@ export interface BacklogItem {
 
 export interface BacklogGroup {
   readonly item: BacklogItem;
-  readonly children: readonly BacklogItem[];
+  readonly children: readonly BacklogGroup[];
 }
 
 export interface BacklogViewProps extends ViewComponentProps {}

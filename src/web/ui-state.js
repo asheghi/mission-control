@@ -252,7 +252,7 @@ function defaultClearTimer(handle) {
  * "constructor") resolve to no name at all.
  */
 export function routeFromHash(hash) {
-  const raw = typeof hash === "string" && hash !== "" ? hash : "#/board";
+  const raw = typeof hash === "string" && hash !== "" ? hash : "#/backlog";
   const path = raw.replace(/^#\//, "").split("?")[0];
   const segments = path.split("/");
   const name = segments[0] ?? "";
@@ -266,7 +266,7 @@ export function routeFromHash(hash) {
 
 /**
  * The view to mount for `hash`: a prototype key from `views` is never treated
- * as a view name, and an unknown view falls back to the board (or the first
+ * as a view name, and an unknown view falls back to the backlog (or the first
  * registered view).
  */
 export function resolveHashRoute(views, hash) {
@@ -278,8 +278,28 @@ export function resolveHashRoute(views, hash) {
   if (name !== null && views && Object.hasOwn(views, name)) {
     return { name, view: views[name], params: {} };
   }
-  const fallbackName = views && Object.hasOwn(views, "board") ? "board" : Object.keys(views ?? {})[0] ?? null;
+  const fallbackName = views && Object.hasOwn(views, "backlog") ? "backlog" : Object.keys(views ?? {})[0] ?? null;
   return { name: fallbackName, view: views?.[fallbackName] ?? undefined, params: {} };
+}
+
+/**
+ * The hash the address bar should be showing for `hash`.
+ *
+ * A bare URL, or a hash that names no registered view, still *renders* the
+ * fallback view — but the URL would then disagree with the page, and no
+ * navigation entry would be marked current, because the nav compares entries
+ * against the unresolved name ("#/nope" matches nothing). This returns the
+ * canonical hash for exactly those cases, so the default view is what the URL
+ * says it is. A recognised route is returned untouched, query string included:
+ * the query carries view state (list filters), never routing.
+ */
+export function canonicalHash(views, hash) {
+  const raw = typeof hash === "string" ? hash : "";
+  const route = resolveHashRoute(views, raw);
+  const { name } = routeFromHash(raw);
+  if (raw !== "" && name !== null && name === route.name) return raw;
+  const href = route.view?.href;
+  return typeof href === "string" && href !== "" ? href : "#/backlog";
 }
 
 // --- Primary navigation -----------------------------------------------------

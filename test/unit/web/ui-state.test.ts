@@ -170,6 +170,10 @@ interface UiState {
     views: Record<string, { href?: string }> | null | undefined,
     hash: unknown,
   ): { name: string | null; view: { href?: string } | undefined; params: { id?: number } };
+  canonicalHash(
+    views: Record<string, { href?: string }> | null | undefined,
+    hash: unknown,
+  ): string;
 }
 
 // The asset is text to the bundler; here it is the real module Bun executes.
@@ -178,6 +182,7 @@ const {
   FILTER_KEYS,
   routeFromHash,
   resolveHashRoute,
+  canonicalHash,
   RECONNECT_BASE_MS,
   RECONNECT_MAX_MS,
   cardMeta,
@@ -278,6 +283,7 @@ describe("module surface", () => {
       cardMeta,
       routeFromHash,
       resolveHashRoute,
+      canonicalHash,
     })) {
       expect(typeof value, name).toBe("function");
     }
@@ -1259,16 +1265,17 @@ describe("routeFromHash", () => {
   });
 
   test("an empty, missing, or hostile hash has no view name", () => {
-    expect(routeFromHash("")).toEqual({ name: "board", id: null }); // default route
-    expect(routeFromHash(undefined)).toEqual({ name: "board", id: null });
+    expect(routeFromHash("")).toEqual({ name: "backlog", id: null }); // default route
+    expect(routeFromHash(undefined)).toEqual({ name: "backlog", id: null });
     expect(routeFromHash("#/")).toEqual({ name: null, id: null });
-    expect(routeFromHash(42)).toEqual({ name: "board", id: null });
+    expect(routeFromHash(42)).toEqual({ name: "backlog", id: null });
   });
 });
 
 describe("resolveHashRoute", () => {
   const views: Record<string, { href?: string }> = {
     board: { href: "#/board" },
+    backlog: { href: "#/backlog" },
     list: { href: "#/list" },
     detail: { href: "#/item" },
   };
@@ -1285,18 +1292,18 @@ describe("resolveHashRoute", () => {
     expect(resolveHashRoute(views, "#/item/7").view).toBe(views["detail"]!);
   });
 
-  test("unknown views and prototype keys fall back to the board", () => {
+  test("unknown views and prototype keys fall back to the backlog", () => {
     for (const hash of ["#/nope", "#/constructor", "#/toString", "#/__proto__", "#/"]) {
       const route = resolveHashRoute(views, hash);
-      expect(route.view, hash).toBe(views["board"]!);
-      expect(route.name, hash).toBe("board");
+      expect(route.view, hash).toBe(views["backlog"]!);
+      expect(route.name, hash).toBe("backlog");
 
     }
   });
 
-  test("an item id that is not a positive integer falls back to the board", () => {
-    expect(resolveHashRoute(views, "#/item/abc").view).toBe(views["board"]!);
-    expect(resolveHashRoute(views, "#/item/0").view).toBe(views["board"]!);
+  test("an item id that is not a positive integer falls back to the backlog", () => {
+    expect(resolveHashRoute(views, "#/item/abc").view).toBe(views["backlog"]!);
+    expect(resolveHashRoute(views, "#/item/0").view).toBe(views["backlog"]!);
   });
 
   test("a registry in any order still resolves every route", () => {
@@ -1306,6 +1313,48 @@ describe("resolveHashRoute", () => {
     }
     expect(resolveHashRoute(reversed, "#/list").name).toBe("list");
     expect(resolveHashRoute(reversed, "#/item/3").name).toBe("item");
+  });
+});
+
+describe("canonicalHash", () => {
+  const views: Record<string, { href?: string }> = {
+    board: { href: "#/board" },
+    backlog: { href: "#/backlog" },
+    list: { href: "#/list" },
+    detail: { href: "#/item" },
+  };
+
+  test("a recognised route is returned untouched, query included", () => {
+    // The query is view state (list filters), never routing: canonicalising
+    // must not strip it.
+    expect(canonicalHash(views, "#/backlog")).toBe("#/backlog");
+    expect(canonicalHash(views, "#/board")).toBe("#/board");
+    expect(canonicalHash(views, "#/list?status=doing&q=tree")).toBe("#/list?status=doing&q=tree");
+    expect(canonicalHash(views, "#/item/12")).toBe("#/item/12");
+  });
+
+  test("a bare URL, an unknown hash, and an unusable item id become the default view", () => {
+    // These all *render* the fallback view, so the URL has to say so — otherwise
+    // the address bar disagrees with the page and no nav entry is current.
+    for (const hash of ["", "#/", "#/nope", "#/constructor", "#/__proto__", "#/item/abc", "#/item/0"]) {
+      expect(canonicalHash(views, hash), hash).toBe("#/backlog");
+    }
+  });
+
+  test("the canonical hash comes from the fallback view's own href", () => {
+    // A registry without a backlog falls back to its first view, and the URL
+    // follows that view rather than a hard-coded default.
+    expect(canonicalHash({ board: { href: "#/board" } }, "#/nope")).toBe("#/board");
+    expect(canonicalHash({ detail: { href: "#/item" }, board: { href: "#/board" } }, "")).toBe("#/item");
+  });
+
+  test("a hostile or empty registry still yields a usable hash", () => {
+    expect(canonicalHash(null, "#/nope")).toBe("#/backlog");
+    expect(canonicalHash({}, "#/nope")).toBe("#/backlog");
+    expect(canonicalHash(views, 42)).toBe("#/backlog");
+    expect(canonicalHash(views, undefined)).toBe("#/backlog");
+    // A registration with no href cannot be navigated to, so the default wins.
+    expect(canonicalHash({ backlog: {} }, "#/nope")).toBe("#/backlog");
   });
 });
 

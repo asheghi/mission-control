@@ -1871,3 +1871,111 @@ describe("typed detail bundle (Phase E)", () => {
     }
   });
 });
+
+// -----------------------------------------------------------------------------
+// Backlog table (nested tree)
+//
+// The backlog is the shell's default view, and it renders as one aligned table
+// whose rows carry the work-item hierarchy: every item with children starts
+// collapsed and expands into its own child rows, nested to any depth. The
+// markers below are the class names, ARIA states, and visible copy the shipped
+// bundle and stylesheet must carry for that to be true in a browser.
+// -----------------------------------------------------------------------------
+describe("backlog table bundle", () => {
+  test("the served bundle carries the nested table's markers", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    for (const marker of [
+      "backlog-table",
+      "backlog-table-scroller",
+      "backlog-item-cell",
+      "backlog-item-title",
+      "backlog-indent",
+      "backlog-toggle",
+      "backlog-child-row",
+      "backlog-child-count",
+      "backlog-labels",
+    ]) {
+      expect(contains(js, marker), `backlog table marker missing: ${marker}`).toBe(true);
+    }
+    // The tree is a real table with a caption and column headers, not a list of
+    // divs, and it announces its own loading and empty states.
+    expect(js).toContain("table");
+    expect(js).toContain("colSpan");
+    expect(js).toContain("Backlog items table");
+    expect(js).toContain("Loading backlog…");
+    expect(js).toContain("No backlog items");
+  });
+
+  test("disclosure state ships as ARIA on the toggle, not as styling alone", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // Each parent row owns a button whose expanded state and accessible name
+    // describe the sub-tasks it reveals, so the collapsed default is announced
+    // rather than merely painted.
+    expect(js).toContain("aria-expanded");
+    expect(js).toContain("aria-level");
+    // The toggle's accessible name is built from these two literals, so the
+    // direction of the disclosure is announced, not just its state.
+    expect(js).toContain("Collapse");
+    expect(js).toContain("Expand");
+    expect(js).toContain("sub-task");
+    expect(js).toContain("sub-tasks");
+    // The indent spacers and the count badge are decorative: the hierarchy is
+    // stated by the row's aria-level and the toggle's label instead.
+    expect(js).toContain("aria-hidden");
+  });
+
+  test("the backlog view is the shell's default view", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const source = readFileSync(join(WEB_SOURCE_DIR, "shell", "AppShell.tsx"), "utf8");
+    const state = readFileSync(join(WEB_SOURCE_DIR, "ui-state.js"), "utf8");
+
+    // The registration survives, and the shell lands on the backlog when the
+    // URL carries no route of its own.
+    expect(js).toContain('{kind:"component",title:"Backlog",href:"#/backlog",component:');
+    expect(source).toContain('location.hash || "#/backlog"');
+    expect(source).not.toContain('location.hash || "#/board"');
+    // An unrecognised or hostile hash resolves to the backlog, and the backlog
+    // is the fallback when a registry has no board entry at all.
+    expect(state).toContain('hash !== "" ? hash : "#/backlog"');
+    expect(state).toContain('Object.hasOwn(views, "backlog") ? "backlog"');
+    // The backlog is registered first, which is the order the primary
+    // navigation lists: the default view leads.
+    const main = readFileSync(join(WEB_SOURCE_DIR, "main.tsx"), "utf8");
+    expect(main.indexOf('"./features/backlog"')).toBeLessThan(main.indexOf('"./features/board"'));
+    // Rendering the default view is not enough: the address bar has to name it,
+    // or the page and the URL disagree and no nav entry is current. The shell
+    // canonicalises with a replace (not a push) because the user did not
+    // navigate anywhere.
+    expect(source).toContain("canonicalHash(views, location.hash)");
+    expect(source).toContain("replaceState");
+    expect(state).toContain("export function canonicalHash");
+  });
+
+  test("the stylesheet resolves every backlog table class, from tokens only", () => {
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    for (const selector of [
+      ".backlog-table",
+      ".backlog-table-scroller",
+      ".backlog-item-cell",
+      ".backlog-item-title",
+      ".backlog-indent",
+      ".backlog-toggle",
+      ".backlog-child-row",
+      ".backlog-child-count",
+      ".backlog-labels",
+      ".backlog-empty-row",
+    ]) {
+      expect(contains(css, selector), `backlog selector missing from stylesheet: ${selector}`).toBe(true);
+    }
+    // The row grid is a table: cells keep their borders and the nested rows are
+    // marked by their own class rather than by inline style.
+    expect(css).toMatch(/\.backlog-table\{[^}]*border-collapse:collapse/);
+    expect(css).toMatch(/\.backlog-child-row\{/);
+    // Indentation is built from token-width spacers, so the tree's depth is not
+    // capped at the number of rules a stylesheet happens to carry.
+    expect(css).toMatch(/\.backlog-indent\{[^}]*var\(--wb-space-4\)/);
+  });
+});

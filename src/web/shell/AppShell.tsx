@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import * as api from "../api.js";
 import { isTerminalAuthError } from "../public-errors.js";
 import { views } from "../views";
-import { createLiveRefreshController, liveIndicatorState, navigationState, resolveHashRoute } from "../ui-state.js";
+import { createLiveRefreshController, canonicalHash, liveIndicatorState, navigationState, resolveHashRoute } from "../ui-state.js";
 import { ViewHost } from "./ViewHost";
 import { safeErrorMessage } from "./safe-error";
 import type { ComponentViewDefinition, EventStreamHandle, LiveController, ViewRoute } from "./types";
@@ -16,7 +16,7 @@ function validCurrentHash(): string {
   if (candidate === "#/board" || candidate === "#/backlog" || /^#\/list(?:\?.*)?$/.test(candidate) || /^#\/item\/[1-9]\d*$/.test(candidate)) {
     return candidate;
   }
-  return "#/board";
+  return "#/backlog";
 }
 
 function Login({ onSignedIn }: LoginProps) {
@@ -86,7 +86,7 @@ function Login({ onSignedIn }: LoginProps) {
 
 export function AppShell() {
   const [signedIn, setSignedIn] = useState(() => Boolean(api.getToken()));
-  const [hash, setHash] = useState(() => location.hash || "#/board");
+  const [hash, setHash] = useState(() => location.hash || "#/backlog");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [connected, setConnected] = useState(false);
   const feedRef = useRef<EventStreamHandle | null>(null);
@@ -158,7 +158,7 @@ export function AppShell() {
 
   useEffect(() => {
     const routeChanged = () => {
-      setHash(location.hash || "#/board");
+      setHash(location.hash || "#/backlog");
     };
     const focusLeft = () => liveRefresh.handleBlur();
     window.addEventListener("hashchange", routeChanged);
@@ -172,6 +172,19 @@ export function AppShell() {
   }, [authenticationFailed, liveRefresh]);
 
   const route = useMemo(() => resolveHashRoute(views, hash) as ViewRoute, [hash]);
+
+  // The URL must name the view that is actually rendered. A bare URL or an
+  // unrecognised hash still falls back to the default view, but leaving the
+  // address bar untouched made the page and the URL disagree — and left no
+  // navigation entry marked current. `replaceState` keeps this out of the
+  // history stack: the user did not navigate anywhere.
+  useEffect(() => {
+    if (!signedIn) return;
+    const canonical = canonicalHash(views, location.hash);
+    if (canonical === location.hash) return;
+    history.replaceState(history.state ?? null, "", canonical);
+    setHash(canonical);
+  }, [signedIn, hash]);
   const navEntries = useMemo(
     () => Object.entries(views as Record<string, ComponentViewDefinition>)
       .filter(([, entry]) => !entry.hidden)
@@ -203,7 +216,7 @@ export function AppShell() {
     <>
       <a class="skip-link" href="#content" onClick={skipToContent}>Skip to content</a>
       <header class="topbar">
-        <a class="brand" href="#/board" aria-label="MissionControl home">
+        <a class="brand" href="#/backlog" aria-label="MissionControl home">
           <span class="brand-mark" aria-hidden="true"><span /><span /><span /></span>
           <span>MissionControl</span>
         </a>
