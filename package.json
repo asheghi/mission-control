@@ -10,6 +10,8 @@
   "scripts": {
     "build:web": "bun run scripts/build-web.ts",
     "dev": "bun run build:web && bun --watch src/entry.ts",
+    "dev:board": "bun run build:web && bun run scripts/dev.ts",
+    "workboard": "bun run src/entry.ts",
     "typecheck": "bun run build:web && tsc --noEmit",
     "test": "bun run build:web && bun test",
     "test:e2e": "bun test test/e2e",

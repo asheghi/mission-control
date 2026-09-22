@@ -814,6 +814,10 @@ describe("static web shell", () => {
       "features/board/hooks.ts",
       "features/detail/hooks.ts",
       "features/list/hooks.ts",
+      // The entry point consumes a `#token=...` development link before the app
+      // renders, so the token is adopted and erased from the address bar before
+      // the shell's first getToken() check. It reaches the same one client.
+      "main.tsx",
       "public-errors.js",
       "shell/AppShell.tsx",
     ]);

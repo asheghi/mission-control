@@ -15,6 +15,47 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Development convenience: a `#token=...` URL fragment is consumed once, then
+ * removed from the address bar.
+ *
+ * The fragment is used rather than a query string because a fragment is never
+ * sent to the server, so it cannot reach an access log or a `Referer`. It is
+ * still a credential in the URL, so it is moved into storage and erased from the
+ * address bar immediately, before anything renders. `replaceState` (not
+ * `pushState`) is deliberate: rewriting would otherwise leave the token in the
+ * previous history entry, reachable with the Back button.
+ *
+ * A token already in storage wins: opening an old link must never silently
+ * replace the credential you are working with.
+ */
+export function consumeTokenFromHash(hash = location.hash) {
+  if (typeof hash !== "string" || !hash.startsWith("#token=")) return null;
+  const payload = hash.slice("#token=".length);
+  // The token ENDS at the next "#", which is the start of the route that follows
+  // it (`#token=X#/list?q=a`). Slicing to the end of the string instead would
+  // swallow the route into the token — storing a credential the server rejects
+  // and losing the destination the link asked for.
+  const separator = payload.indexOf("#");
+  const token = separator === -1 ? payload : payload.slice(0, separator);
+  if (token === "") return null;
+  const route = separator === -1 ? "" : payload.slice(separator);
+  const url = `${location.pathname}${location.search}${route}`;
+  let accepted = false;
+  try {
+    history.replaceState(history.state ?? null, "", url);
+    accepted = true;
+  } catch {
+    // A replaceState that fails still leaves the token in the URL, so it is not
+    // adopted: better to show the sign-in form than to log in and leave the
+    // credential sitting in the address bar.
+    accepted = false;
+  }
+  if (!accepted) return null;
+  setToken(token);
+  return token;
+}
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) ?? sessionStorage.getItem(TOKEN_KEY);
 }

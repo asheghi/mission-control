@@ -21,6 +21,7 @@ interface ApiClient {
   ApiError: new (code: string, message: string, status: number, details?: unknown) => Error & { status: number };
   getToken(): string | null;
   setToken(token: string | null): void;
+  consumeTokenFromHash(hash?: string): string | null;
   subscribeEvents(handlers: StreamHandlers, signal?: AbortSignal): { close(): void };
 }
 
@@ -317,5 +318,72 @@ describe("subscribeEvents", () => {
 
     expect(closed).toBe(1); // the new `finished` guard must not double-report
     expect(errors).toBe(0);
+  });
+});
+
+// --- development auto-login fragment ----------------------------------------
+
+// A `#token=...` link is how `bun run dev:board` signs a developer in. The
+// parsing is load-bearing: the token ends at the NEXT "#", and getting that
+// wrong stores a token the server rejects while also losing the route the link
+// asked for — a silent sign-in failure with no visible cause.
+describe("consumeTokenFromHash", () => {
+  let replaced: string[];
+
+  beforeEach(() => {
+    replaced = [];
+    (globalThis as any).location = { pathname: "/", search: "", hash: "" };
+    (globalThis as any).history = {
+      state: null,
+      replaceState: (_state: unknown, _title: string, url: string) => {
+        replaced.push(url);
+        const i = url.indexOf("#");
+        (globalThis as any).location.hash = i === -1 ? "" : url.slice(i);
+      },
+    };
+  });
+
+  afterEach(() => {
+    delete (globalThis as any).location;
+    delete (globalThis as any).history;
+  });
+
+  test("adopts the token and strips it from the URL", () => {
+    const result = api.consumeTokenFromHash("#token=wb_abc123");
+    expect(result).toBe("wb_abc123");
+    expect(api.getToken()).toBe("wb_abc123");
+    expect(replaced).toEqual(["/"]);
+  });
+
+  test("the token ends at the next #, so the route survives", () => {
+    const result = api.consumeTokenFromHash("#token=wb_abc123#/list?type=bug");
+    expect(result).toBe("wb_abc123");
+    expect(api.getToken()).toBe("wb_abc123");
+    // The route must be restored, and must NOT have been swallowed into the token.
+    expect(replaced).toEqual(["/#/list?type=bug"]);
+    expect(api.getToken()).not.toContain("#");
+  });
+
+  test("a token with no route leaves a clean path", () => {
+    expect(api.consumeTokenFromHash("#token=wb_abc")).toBe("wb_abc");
+    expect(replaced).toEqual(["/"]);
+  });
+
+  test("anything that is not a token fragment is ignored", () => {
+    for (const hash of ["#/backlog", "#/item/3", "", "#token=", "#tokenX=abc"]) {
+      const before = api.getToken();
+      expect(api.consumeTokenFromHash(hash), hash).toBeNull();
+      expect(api.getToken(), hash).toBe(before);
+    }
+    expect(replaced).toEqual([]);
+  });
+
+  test("a failed URL rewrite refuses the token rather than leaving it in the bar", () => {
+    (globalThis as any).history.replaceState = () => {
+      throw new Error("blocked");
+    };
+    api.setToken(null);
+    expect(api.consumeTokenFromHash("#token=wb_leaky")).toBeNull();
+    expect(api.getToken()).toBeNull();
   });
 });
