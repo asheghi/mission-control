@@ -1,8 +1,40 @@
-import type { ParticipantKind, Priority, WorkStatus } from "../../../domain/types";
+import { WORK_ITEM_TYPES } from "../../../domain/types";
+import type { ItemRelationshipName, ParticipantKind, Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 import type { ViewComponentProps } from "../../shell/types";
 
 export const DETAIL_STATUSES = ["todo", "doing", "blocked", "done"] as const satisfies readonly WorkStatus[];
 export const DETAIL_PRIORITIES = [0, 1, 2, 3] as const satisfies readonly Priority[];
+
+/**
+ * Work-item types offered by the detail view's type control.
+ *
+ * `WORK_ITEM_TYPES` is re-declared through `satisfies` rather than hand-listed,
+ * so a type added to the domain cannot silently go missing from the control.
+ */
+export const DETAIL_WORK_ITEM_TYPES = WORK_ITEM_TYPES satisfies readonly WorkItemType[];
+
+/**
+ * Relationship names a user can create from the detail view.
+ *
+ * `parent` and `child` are deliberately absent: the hierarchy is structural —
+ * it is what puts an item in the backlog tree — and it has its own control, so
+ * offering it here would give one field two entry points that can disagree.
+ */
+export const DETAIL_ADD_RELATIONSHIP_NAMES = [
+  "related",
+  "predecessor",
+  "successor",
+  "duplicate",
+  "duplicate_of",
+] as const satisfies readonly Exclude<ItemRelationshipName, "parent" | "child">[];
+
+export type DetailAddRelationshipName = (typeof DETAIL_ADD_RELATIONSHIP_NAMES)[number];
+
+/** The value a field carries when the item holds no such relationship. */
+export const RELATIONSHIP_NONE = "none" as const;
+
+/** The relationship name <select> may submit besides a real relationship. */
+export const DETAIL_ADD_RELATIONSHIP_NONE = RELATIONSHIP_NONE;
 
 // Server-side limits, mirrored so the client validates before it sends:
 // `labelNameSchema` is a trimmed 1-64 character string and both item schemas
@@ -51,6 +83,8 @@ export interface DetailItem {
   readonly title: string;
   readonly body: string;
   readonly status: WorkStatus;
+  readonly type: WorkItemType;
+  readonly backlogPosition: number;
   readonly priority: Priority;
   readonly assignee: DetailParticipant | null;
   readonly createdAt: string;
@@ -76,13 +110,66 @@ export interface DetailHistoryEntry {
   readonly createdAt: string;
 }
 
+export interface DetailRelationship {
+  readonly id: number;
+  readonly name: ItemRelationshipName;
+  readonly item: DetailItem;
+  readonly createdAt: string;
+}
+
 export interface DetailPayload {
   readonly item: DetailItem;
   readonly parent: DetailItem | null;
-  readonly subtasks: readonly DetailItem[];
+  readonly children: readonly DetailItem[];
+  readonly related: readonly DetailRelationship[];
+  readonly predecessors: readonly DetailRelationship[];
+  readonly successors: readonly DetailRelationship[];
+  readonly duplicates: readonly DetailRelationship[];
+  readonly duplicateOf: DetailRelationship | null;
   readonly comments: readonly DetailComment[];
   readonly history: readonly DetailHistoryEntry[];
 }
+
+/**
+ * One relationship group as the view renders it: the heading, the state field
+ * that holds its rows, and how the group may be edited.
+ *
+ * `key` is the camel-case `DetailState` field, so a group and the state it
+ * reads cannot drift apart. Every entry is a real key of the payload the
+ * server sends — the seven names the API can report relative to an item.
+ */
+export interface RelationshipGroupSpec {
+  readonly key: "related" | "predecessors" | "successors" | "duplicates";
+  /** The relationship name, and so the label and the row's stable class. */
+  readonly name: ItemRelationshipName;
+  /**
+   * True for the groups whose rows can be removed by `relationship.id`.
+   *
+   * A hierarchy row carries no link id: `parent` is one `parentId` on the item
+   * and `children` are found by that field, so neither is a removable link. The
+   * view checks this rather than inferring it from the name, so a group can
+   * never be handed a remove button that has no id to call.
+   */
+  readonly removable: boolean;
+}
+
+/**
+ * Every relationship group, in the order the view renders them, and a single
+ * source of truth for which groups are removable.
+ */
+export const DETAIL_RELATIONSHIP_GROUPS = [
+  { key: "related", name: "related", removable: true },
+  { key: "predecessors", name: "predecessor", removable: true },
+  { key: "successors", name: "successor", removable: true },
+  { key: "duplicates", name: "duplicate", removable: true },
+] as const satisfies readonly RelationshipGroupSpec[];
+
+/**
+ * The `duplicate_of` group. It is the mirror image of `duplicates` and is the
+ * only group whose state holds a single relationship rather than a list, so it
+ * cannot be folded into `DETAIL_RELATIONSHIP_GROUPS`.
+ */
+export const DETAIL_DUPLICATE_OF_NAME: ItemRelationshipName = "duplicate_of";
 
 export interface MentionTrigger {
   readonly start: number;
@@ -118,7 +205,12 @@ export interface DetailState {
   readonly comments: readonly DetailComment[];
   readonly history: readonly DetailHistoryEntry[];
   readonly parent: DetailItem | null;
-  readonly subtasks: readonly DetailItem[];
+  readonly children: readonly DetailItem[];
+  readonly related: readonly DetailRelationship[];
+  readonly predecessors: readonly DetailRelationship[];
+  readonly successors: readonly DetailRelationship[];
+  readonly duplicates: readonly DetailRelationship[];
+  readonly duplicateOf: DetailRelationship | null;
   readonly participants: readonly DetailParticipant[];
   readonly labels: readonly DetailLabel[];
   readonly loading: boolean;
@@ -151,9 +243,11 @@ export interface DetailState {
   readonly flushBody: () => Promise<void>;
   readonly setBodyFocused: (focused: boolean) => void;
   readonly setBodyTab: (tab: BodyTab) => void;
-  readonly patchField: (patch: { status?: WorkStatus; priority?: Priority; assigneeId?: number | null }) => void;
+  readonly patchField: (patch: { status?: WorkStatus; type?: WorkItemType; priority?: Priority; assigneeId?: number | null }) => void;
   readonly setParent: (parentId: number | null) => void;
   readonly createSubtask: (title: string) => Promise<boolean>;
+  readonly addRelationship: (name: Exclude<ItemRelationshipName, "parent" | "child">, itemId: number) => void;
+  readonly removeRelationship: (relationshipId: number) => void;
   readonly setLabelDraft: (value: string) => void;
   readonly addLabel: (name: string) => void;
   readonly removeLabel: (name: string) => void;

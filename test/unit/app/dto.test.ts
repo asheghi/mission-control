@@ -38,6 +38,8 @@ describe("dto mappers", () => {
       updated_at: "2026-01-02T00:00:00.000Z",
       closed_at: null,
       parent_id: null,
+      work_item_type: "bug",
+      backlog_position: 4,
       assignee_name: "bot",
       assignee_kind: "agent",
       comment_count: 2,
@@ -47,6 +49,8 @@ describe("dto mappers", () => {
     expect(dto.labels).toHaveLength(1);
     expect(dto.commentCount).toBe(2);
     expect(dto.status).toBe("doing");
+    expect(dto.type).toBe("bug");
+    expect(dto.backlogPosition).toBe(4);
     expect(dto.closedAt).toBeNull();
 
     const unassigned = toItemDto({ ...row, assignee_id: null, assignee_name: null, assignee_kind: null }, []);

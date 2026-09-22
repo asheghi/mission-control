@@ -1,6 +1,6 @@
 // Owned DTOs — the only shapes transports ever see. Database rows never cross
 // the repository boundary un-mapped.
-import type { ParticipantKind, Priority, WorkStatus } from "../domain/types";
+import type { ItemRelationshipName, ParticipantKind, Priority, WorkItemType, WorkStatus } from "../domain/types";
 import type { CommentJoinedRow } from "../db/repositories/comments";
 import type { HistoryJoinedRow } from "../db/repositories/history";
 import type { ItemJoinedRow } from "../db/repositories/items";
@@ -35,14 +35,30 @@ export interface ItemDto {
   readonly body: string;
   readonly status: WorkStatus;
   readonly priority: Priority;
+  readonly type: WorkItemType;
   readonly assignee: AssigneeDto | null;
   readonly createdBy: number;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
   readonly parentId: number | null;
+  /** Nonnegative sibling position; ordering is scoped to `parentId`. */
+  readonly backlogPosition: number;
   readonly labels: LabelDto[];
   readonly commentCount: number;
+}
+
+/**
+ * A non-hierarchical relationship between two items, named relative to the
+ * item it was read from: `related`, `predecessor`, `successor`, `duplicate`,
+ * or `duplicate_of`. `id` is the stored link, so removing a relationship only
+ * ever needs this identifier.
+ */
+export interface ItemRelationshipDto {
+  readonly id: number;
+  readonly name: ItemRelationshipName;
+  readonly item: ItemDto;
+  readonly createdAt: string;
 }
 
 export interface MyWorkItemDto {
@@ -106,6 +122,7 @@ export function toItemDto(row: ItemJoinedRow, labels: readonly LabelDto[]): Item
     body: row.body,
     status: row.status,
     priority: row.priority,
+    type: row.work_item_type,
     assignee:
       row.assignee_id !== null && row.assignee_name !== null && row.assignee_kind !== null
         ? { id: row.assignee_id, name: row.assignee_name, kind: row.assignee_kind }
@@ -115,6 +132,7 @@ export function toItemDto(row: ItemJoinedRow, labels: readonly LabelDto[]): Item
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
     parentId: row.parent_id,
+    backlogPosition: row.backlog_position,
     labels: [...labels],
     commentCount: row.comment_count,
   };

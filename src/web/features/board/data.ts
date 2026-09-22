@@ -1,4 +1,5 @@
-import type { ParticipantKind, Priority, WorkStatus } from "../../../domain/types";
+import { WORK_ITEM_TYPES } from "../../../domain/types";
+import type { ParticipantKind, Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 import { BOARD_STATUSES } from "./types";
 import type { BoardAssignee, BoardItem, BoardLabel } from "./types";
 
@@ -48,7 +49,12 @@ export function boardItem(value: unknown): BoardItem | null {
   if (!isRecord(value)
     || !isPositiveId(value.id)
     || typeof value.title !== "string"
-    || !isWorkStatus(value.status)) return null;
+    || !isWorkStatus(value.status)
+    || typeof value.type !== "string"
+    || !(WORK_ITEM_TYPES as readonly string[]).includes(value.type)
+    || typeof value.backlogPosition !== "number"
+    || !Number.isSafeInteger(value.backlogPosition)
+    || value.backlogPosition < 0) return null;
 
   const priority = boardPriority(value.priority);
   const labels = boardLabels(value.labels);
@@ -60,6 +66,8 @@ export function boardItem(value: unknown): BoardItem | null {
     id: value.id,
     title: value.title,
     status: value.status,
+    type: value.type as WorkItemType,
+    backlogPosition: value.backlogPosition,
     priority,
     labels,
     commentCount,

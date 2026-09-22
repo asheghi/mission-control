@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import * as apiModule from "../../api.js";
 import { isTerminalAuthError } from "../../public-errors.js";
 import { createFilterStore } from "../../ui-state.js";
+import { isWorkItemType } from "../../views";
 import { labelsFromResponse, listPageFromResponse, participantsFromResponse } from "./data";
 import { LIST_STATUSES } from "./types";
 import type { ListFilters, ListItem, ListLabel, ListParticipant, ListState, ListViewProps } from "./types";
@@ -45,15 +46,20 @@ interface RefreshIntent {
 const api = apiModule as ListApi;
 
 function filterQueryKey(filters: ListFilters): string {
-  return JSON.stringify([filters.status, filters.assignee, filters.label, filters.q]);
+  return JSON.stringify([filters.status, filters.type, filters.assignee, filters.label, filters.q]);
 }
 
 export function useList({ refreshGeneration, onAuthenticationFailure }: ListViewProps): ListState {
   const [store] = useState<FilterStore>(() => createFilterStore() as FilterStore);
   const [initialFilters] = useState<ListFilters>(() => {
     const loaded = store.load();
-    if (loaded.status === "" || LIST_STATUSES.some((status) => status === loaded.status)) return loaded;
-    return store.set({ ...loaded, status: "" });
+    // A restored status or type the API would reject falls back to "all" rather
+    // than reaching a request that cannot succeed; the filters beside it are
+    // left untouched, so one stale value cannot silently widen the others.
+    const statusValid = loaded.status === "" || LIST_STATUSES.some((status) => status === loaded.status);
+    const typeValid = loaded.type === "" || isWorkItemType(loaded.type);
+    if (statusValid && typeValid) return loaded;
+    return store.set({ ...loaded, status: statusValid ? loaded.status : "", type: typeValid ? loaded.type : "" });
   });
 
   const mountedRef = useRef(true);
@@ -134,6 +140,7 @@ export function useList({ refreshGeneration, onAuthenticationFailure }: ListView
         const requestedCursor = !current.reset ? nextCursorRef.current : null;
         if (requestedCursor !== null) params.cursor = requestedCursor;
         if (currentFilters.status !== "") params.status = currentFilters.status;
+        if (currentFilters.type !== "") params.type = currentFilters.type;
         if (currentFilters.assignee !== "") params.assignee = currentFilters.assignee;
         if (currentFilters.label !== "") params.label = currentFilters.label;
         if (currentFilters.q !== "") params.q = currentFilters.q;

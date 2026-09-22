@@ -84,6 +84,17 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .chip.p2 { color: var(--wb-color-fg-muted); border-color: var(--wb-color-neutral-emphasis); background: var(--wb-color-canvas-subtle); }
 .chip.p3 { color: var(--wb-color-fg-muted); border-color: var(--wb-color-border-muted); background: transparent; }
 .label-chip { color: var(--wb-color-accent-fg); border-color: var(--wb-color-accent-muted); background: var(--wb-color-accent-subtle); }
+/* Work-item type. The letter mark plus the label carry the meaning, so the
+   palette is decoration rather than the only signal: the four types stay
+   distinguishable in greyscale, and every rule below consumes a semantic
+   --wb-* token. A type this build does not recognise gets the neutral chip and
+   reads "Unknown" instead of rendering as an unlabelled blank. */
+.type-chip { gap: 4px; }
+.type-mark { display: inline-flex; align-items: center; justify-content: center; width: 1rem; height: 1rem; border-radius: var(--wb-radius-small); background: var(--wb-color-neutral-subtle); color: var(--wb-color-fg-default); font-size: 10px; font-weight: var(--wb-font-weight-semibold); line-height: 1; }
+.type-feature { color: var(--wb-color-accent-fg); border-color: var(--wb-color-accent-muted); background: var(--wb-color-accent-subtle); }
+.type-user_story { color: var(--wb-color-info-fg); border-color: var(--wb-color-info-muted); background: var(--wb-color-info-subtle); }
+.type-bug { color: var(--wb-color-danger-fg); border-color: var(--wb-color-danger-muted); background: var(--wb-color-danger-subtle); }
+.type-task { color: var(--wb-color-fg-muted); border-color: var(--wb-color-border-muted); background: var(--wb-color-canvas-subtle); }
 .detail-labels { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
 .labels-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .labels-title { margin-right: 2px; color: var(--wb-color-fg-muted); font-size: 12px; font-weight: 500; }
@@ -340,8 +351,15 @@ main.content { padding-top: var(--wb-space-8); }
 /* One spacer per ancestor level. Nesting is unbounded, so indentation is built
    from repeated token-width spacers rather than a per-element custom property. */
 .backlog-indent { width: var(--wb-space-4); flex: 0 0 var(--wb-space-4); align-self: stretch; }
-.backlog-item-title a, .relationship-row a { min-width: 0; color: var(--wb-color-fg-default); font-weight: var(--wb-font-weight-medium); overflow-wrap: anywhere; text-decoration: none; }
-.backlog-item-title a { flex: 1; }
+/* Shared title-link treatment. The wrap mode is NOT set here: a backlog title
+   and a relationship title live in very different column widths, so each sets
+   its own (`.backlog-item-title a` and `.relationship-row a` below). Two
+   conflicting `overflow-wrap` values used to sit on this selector and the later
+   one silently won. */
+.backlog-item-title a, .relationship-row a { min-width: 0; color: var(--wb-color-fg-default); font-weight: var(--wb-font-weight-medium); text-decoration: none; }
+/* The backlog title keeps `anywhere`: its column is wide, and a long unbroken
+   token there must not push the table into horizontal scroll. */
+.backlog-item-title a { flex: 1; overflow-wrap: anywhere; }
 /* The "#id" prefix is one token: left to wrap, a narrow column split it across
    two lines and the number ran into the title. */
 .backlog-item-title a > .muted { white-space: nowrap; margin-inline-end: .25rem; }
@@ -357,12 +375,66 @@ main.content { padding-top: var(--wb-space-8); }
 .backlog-labels { display: flex; gap: var(--wb-space-1); flex-wrap: wrap; }
 .backlog-empty-row td { padding: var(--wb-space-6); text-align: center; }
 .backlog-table .backlog-empty-row:hover { background: transparent; }
+/* The type chip is deliberately plain: the type is stated in words, and colour
+   is left to the status and priority chips that already own it. */
+.backlog-type-chip { color: var(--wb-color-fg-muted); border-color: var(--wb-color-border-muted); background: transparent; }
+/* The handle is a real, focusable control — the pointer affordance and the
+   keyboard affordance share one element, so neither is a hidden shortcut. */
+.backlog-drag-handle { width: 1.25rem; height: 1.75rem; flex: 0 0 1.25rem; display: inline-grid; place-items: center; border-radius: var(--wb-radius-small); color: var(--wb-color-fg-muted); cursor: grab; font-size: var(--wb-font-size-xs); letter-spacing: -.1em; }
+.backlog-drag-handle:hover { color: var(--wb-color-fg-default); background: var(--wb-color-control-hover); }
+.backlog-drag-handle:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
+.backlog-drag-handle:active { cursor: grabbing; }
+.backlog-move-controls { display: flex; align-items: center; gap: var(--wb-space-1); }
+.backlog-move-button { min-height: 1.75rem; min-width: 1.75rem; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-canvas-default); color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); line-height: 1; }
+.backlog-move-button:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--wb-color-fg-default); border-color: var(--wb-color-accent-fg); background: var(--wb-color-control-hover); }
+/* Two ways a move control reads as unavailable, and they are not the same
+   thing. `:disabled` is transient (a write is in flight). `[aria-disabled]` is
+   structural (this row simply has no previous sibling) and the control STAYS
+   focusable so a keyboard user still hears the reason. Both are dimmed and
+   neither responds to a click, because the click handler checks the same flag. */
+.backlog-move-button:disabled,
+.backlog-move-button[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+/* Drop feedback: the row being dragged is faded, and the row under the pointer
+   states which of the two insertions it would perform. The outline is a second
+   cue — the movement itself, announced in the live region, is the first. */
+.backlog-dragging { opacity: .5; }
+.backlog-table tbody tr.backdrop-before { box-shadow: inset 0 2px 0 0 var(--wb-color-accent-emphasis); }
+.backlog-table tbody tr.backdrop-into { background: var(--wb-color-accent-subtle); outline: 1px solid var(--wb-color-accent-emphasis); outline-offset: -1px; }
+/* The row whose pending position is on screen is marked, so a move that has not
+   been confirmed yet never looks identical to one that has. */
+.backlog-optimistic { font-style: italic; }
+.backlog-add-hint, .backlog-root-note { margin: 0; font-size: var(--wb-font-size-xs); }
+.backlog-root-note { margin-top: var(--wb-space-3); }
+.backlog-add-notice { margin: 0; }
+.backlog-status { overflow-wrap: anywhere; }
 .relationship-subtasks ul { margin: 0; padding: 0; display: grid; gap: var(--wb-space-3); list-style: none; }
 .detail-relationships { padding: var(--wb-space-4); }
 .relationships-head { display: flex; align-items: center; justify-content: space-between; gap: var(--wb-space-2); margin-bottom: var(--wb-space-3); }
 .relationships-head h2, .relationship-parent h3, .relationship-subtasks h3 { margin: 0; font-size: var(--wb-font-size-sm); }
 .relationship-parent, .relationship-subtasks { display: grid; gap: var(--wb-space-2); padding-block: var(--wb-space-3); border-top: 1px solid var(--wb-color-border-muted); }
-.relationship-row { min-width: 0; display: flex; align-items: center; gap: var(--wb-space-2); }
+/* A relationship row must fit a type chip, a status chip, a Remove button and a
+   title into a ~262px row inside the 336px side card.
+   The title is what a reader actually needs, so it gets a floor of 8rem and the
+   row WRAPS: the title takes the first line, and whatever does not fit — the
+   Remove button — moves to the next line rather than being pushed outside the
+   card. Two earlier attempts failed here and are worth not repeating:
+     * `overflow-wrap: anywhere` (with the flex line free to shrink the link to
+       ~27px) split words inside themselves ("Relea / se 1", "Logi / n / stor / y").
+       `break-word` only splits a word that cannot fit a line of its own.
+     * `flex: 1 1 auto` alone left the row `flex-wrap: nowrap`, so instead of
+       wrapping it overflowed the card by up to 101px and painted the Remove
+       button outside it. `flex-wrap: wrap` is what actually keeps the row inside
+       the card; the row must satisfy `scrollWidth <= clientWidth`.
+   The `min-width: 8rem` floor is what stops the wrap from re-introducing the
+   squeeze: below it the link stops shrinking and the row wraps instead. */
+.relationship-row { min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--wb-space-2); }
+.relationship-row a { flex: 1 1 8rem; min-width: 8rem; overflow-wrap: break-word; }
+/* The chips are decoration beside the title: they hold their intrinsic width and
+   never wrap their own label. */
+.relationship-row > .chip { flex: 0 0 auto; white-space: nowrap; }
+/* Kept for clarity of intent: the Remove button yields to the title and, once
+   the row wraps, sits on its own line at the start of it. */
+.relationship-remove { flex: 0 0 auto; }
 .relationship-form { display: grid; gap: var(--wb-space-1); color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); }
 .relationship-form input { min-width: 0; }
 .relationship-add { margin-top: var(--wb-space-1); }
@@ -473,6 +545,14 @@ main.content { padding-top: var(--wb-space-8); }
   .backlog-table td[data-label="Priority"] { grid-column: 1; }
   .backlog-table td[data-label="Assignee"] { grid-column: 2; }
   .backlog-table td[data-label="Labels"] { grid-column: 1 / -1; }
+  /* Type and Status sit together on one line, and Move spans the card so its
+     buttons stay a comfortable tap target instead of stacking in a column. */
+  .backlog-table td[data-label="Type"] { grid-column: 1; }
+  .backlog-table td[data-label="Status"] { grid-column: 2; }
+  .backlog-table td[data-label="Move"] { grid-column: 1 / -1; }
+  .backlog-drag-handle, .backlog-move-button { width: 2.75rem; height: 2.75rem; min-width: 2.75rem; min-height: 2.75rem; }
+  .backlog-drag-handle { flex-basis: 2.75rem; }
+  .backlog-move-button { font-size: var(--wb-font-size-default); }
   /* The item cell is the row's own heading, so repeating "ITEM" above every
      title would be noise rather than a field label. */
   .backlog-table .backlog-item-cell::before { display: none; }
@@ -482,11 +562,10 @@ main.content { padding-top: var(--wb-space-8); }
   .backlog-empty-row { display: block; }
   .backlog-empty-row td { display: block; padding: 0; }
   .backlog-empty-row td::before { display: none; }
-  .relationship-row { flex-wrap: wrap; }
   .backlog-add > div, .relationship-form > div, .relationship-add { align-items: stretch; flex-direction: column; }
-  /* The row layout's `flex: 1 1 12rem` basis becomes a *height* once the form
-     stacks into a column, which made the single-line input 192px tall on a
-     phone. Stacked, the input takes the width and keeps its control height. */
+  /* The backlog title link's `flex: 1 1 12rem` basis becomes a *height* once the
+     add form stacks into a column, which made the single-line input 192px tall on
+     a phone. Stacked, the input takes the width and keeps its control height. */
   .backlog-add input { width: 100%; flex: 0 0 auto; }
   .backlog-add button, .relationship-form button, .relationship-add button { width: 100%; }
   .list-empty-row td { display: block; }

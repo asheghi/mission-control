@@ -5,26 +5,29 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { resolveMentions } from "../domain/mentions";
 import { ConflictError, NotFoundError, ValidationError } from "../domain/errors";
-import type { Actor, Clock, Priority, WorkStatus } from "../domain/types";
+import type { Actor, Clock, ItemRelationshipName, Priority, StoredItemLinkKind, WorkItemType, WorkStatus } from "../domain/types";
+import { DEFAULT_CHILD_WORK_ITEM_TYPE, DEFAULT_TOP_LEVEL_WORK_ITEM_TYPE, RELATIONSHIPS_BY_LINK, systemClock } from "../domain/types";
 import { statusTimestamps } from "../domain/transitions";
-import { systemClock } from "../domain/types";
 import {
   bodySchema,
   colorSchema,
   commentBodySchema,
   handleSchema,
+  itemRelationshipNameSchema,
   labelNameSchema,
   parseInput,
   participantKindSchema,
   positiveIdSchema,
   prioritySchema,
   titleSchema,
+  workItemTypeSchema,
   workStatusSchema,
 } from "../domain/validation";
 import {
   type CommentDto,
   type HistoryEntryDto,
   type ItemDto,
+  type ItemRelationshipDto,
   type LabelDto,
   type MyWorkItemDto,
   type ParticipantDto,
@@ -43,10 +46,19 @@ import {
   deleteItem as deleteItemRow,
   getItemById,
   getItemJoined,
+  listBacklogItems,
   listItems,
+  moveItemInBacklog,
   myWork,
   updateItem as updateItemRow,
 } from "../db/repositories/items";
+import {
+  createItemLink,
+  deleteItemLink,
+  getItemLinkById,
+  listItemLinks,
+} from "../db/repositories/item-links";
+import type { ItemLinkRow } from "../db/repositories/item-links";
 import {
   createLabel as createLabelRow,
   getLabelByName,
@@ -78,6 +90,9 @@ export const createItemInputSchema = z.strictObject({
   priority: prioritySchema.optional().default(2),
   assigneeId: positiveIdSchema.nullable().optional(),
   parentId: positiveIdSchema.nullable().optional(),
+  // Optional for backward compatibility: an omitted type is inferred from the
+  // parent (see `resolveCreateType`), so existing callers keep working.
+  type: workItemTypeSchema.optional(),
   labels: z.array(labelNameSchema).max(20).optional().default([]),
 });
 
@@ -89,11 +104,28 @@ export const updateItemInputSchema = z
     priority: prioritySchema.optional(),
     assigneeId: positiveIdSchema.nullable().optional(),
     parentId: positiveIdSchema.nullable().optional(),
+    type: workItemTypeSchema.optional(),
     labels: z.array(labelNameSchema).max(20).optional(),
   })
   .refine((value) => Object.keys(value).length > 0, "Provide at least one field to update.");
 
 export const addCommentInputSchema = z.strictObject({ body: commentBodySchema });
+
+export const createItemRelationshipInputSchema = z.strictObject({
+  name: itemRelationshipNameSchema,
+  itemId: positiveIdSchema,
+});
+
+export const deleteItemRelationshipInputSchema = z.strictObject({
+  relationshipId: positiveIdSchema,
+});
+
+export const reorderItemInputSchema = z.strictObject({
+  // null (or omitted) means the top level.
+  parentId: positiveIdSchema.nullable().optional(),
+  // Insert immediately before this sibling; omitted appends to the end.
+  beforeId: positiveIdSchema.nullable().optional(),
+});
 
 export const createParticipantInputSchema = z.strictObject({
   name: handleSchema,
@@ -105,6 +137,7 @@ export const createLabelInputSchema = z.strictObject({ name: labelNameSchema, co
 
 export const listItemsFilterSchema = z.strictObject({
   status: workStatusSchema.optional(),
+  type: workItemTypeSchema.optional(),
   assigneeId: positiveIdSchema.optional(),
   unassigned: z.boolean().optional(),
   labelName: labelNameSchema.optional(),
@@ -122,12 +155,32 @@ export const myWorkFilterSchema = z.strictObject({
 export interface ItemDetailDto {
   readonly item: ItemDto;
   readonly parent: ItemDto | null;
-  readonly subtasks: readonly ItemDto[];
+  /** Direct children. Renamed from the former `subtasks`, which was wrong for
+   *  a model where any type may parent any other type. */
+  readonly children: readonly ItemDto[];
+  readonly related: readonly ItemRelationshipDto[];
+  readonly predecessors: readonly ItemRelationshipDto[];
+  readonly successors: readonly ItemRelationshipDto[];
+  readonly duplicates: readonly ItemRelationshipDto[];
+  readonly duplicateOf: ItemRelationshipDto | null;
   readonly comments: readonly CommentDto[];
   readonly history: readonly HistoryEntryDto[];
 }
 
 export type UpdateItemResult = ItemDetailDto & { readonly changedFields: readonly string[] };
+
+/** Result of a backlog reorder: the moved item and both affected scopes. */
+export interface ReorderItemResult {
+  readonly item: ItemDto;
+  readonly itemId: number;
+  readonly parentId: number | null;
+  readonly backlogPosition: number;
+  readonly changedFields: readonly string[];
+  /** The moved item's new scope, already re-sorted. */
+  readonly siblings: readonly ItemDto[];
+  /** The previous scope when the move crossed levels; empty otherwise. */
+  readonly previousSiblings: readonly ItemDto[];
+}
 
 export interface ItemListResult {
   readonly items: readonly ItemDto[];
@@ -168,6 +221,7 @@ export class WorkboardService {
     const labelId = parsed.labelName !== undefined ? this.requireLabelByName(parsed.labelName).id : undefined;
     const result = listItems(this.db, {
       ...(parsed.status !== undefined ? { statusIn: [parsed.status] as const } : {}),
+      ...(parsed.type !== undefined ? { typeIn: [parsed.type] as const } : {}),
       ...(parsed.assigneeId !== undefined ? { assigneeId: parsed.assigneeId } : {}),
       ...(parsed.unassigned !== undefined ? { unassigned: parsed.unassigned } : {}),
       ...(labelId !== undefined ? { labelId } : {}),
@@ -185,21 +239,7 @@ export class WorkboardService {
   getItem(actor: Actor, itemId: number): ItemDetailDto {
     void actor;
     parseInput(positiveIdSchema, itemId);
-    const row = getItemJoined(this.db, itemId);
-    if (row === null) throw new NotFoundError("item", itemId);
-    const labels = toLabelDtos(listLabelsForItem(this.db, itemId));
-    const parentRow = row.parent_id === null ? null : getItemJoined(this.db, row.parent_id);
-    const childRows = listItems(this.db, { parentId: itemId, limit: 100 }).items;
-    const relatedIds = [
-      ...(parentRow === null ? [] : [parentRow.id]),
-      ...childRows.map((child) => child.id),
-    ];
-    const relatedLabels = labelsForItems(this.db, relatedIds);
-    const parent = parentRow === null ? null : toItemDto(parentRow, toLabelDtos(relatedLabels.get(parentRow.id) ?? []));
-    const subtasks = childRows.map((child) => toItemDto(child, toLabelDtos(relatedLabels.get(child.id) ?? [])));
-    const comments = listComments(this.db, itemId, { limit: DETAIL_COMMENT_LIMIT }).comments.map(toCommentDto);
-    const history = listHistory(this.db, itemId, { limit: DETAIL_HISTORY_LIMIT }).entries.map(toHistoryEntryDto);
-    return { item: toItemDto(row, labels), parent, subtasks, comments, history };
+    return this.buildDetail(itemId);
   }
 
   myWork(actor: Actor, filter: unknown = {}): MyWorkResult {
@@ -225,6 +265,18 @@ export class WorkboardService {
     return listParticipants(this.db).map(toParticipantDto);
   }
 
+  /**
+   * Every unfinished item in backlog order. Deliberately unpaginated and
+   * uncapped: backlog order is positional, so a page limit would silently drop
+   * siblings and a cursor would break as soon as positions changed.
+   */
+  listBacklog(actor: Actor): readonly ItemDto[] {
+    void actor;
+    const rows = listBacklogItems(this.db);
+    const labelMap = labelsForItems(this.db, rows.map((row) => row.id));
+    return rows.map((row) => toItemDto(row, toLabelDtos(labelMap.get(row.id) ?? [])));
+  }
+
   listLabels(actor: Actor): readonly LabelDto[] {
     void actor;
     return listLabels(this.db).map(toLabelDto);
@@ -238,6 +290,8 @@ export class WorkboardService {
     const itemId = this.db.transaction(() => {
       const assigneeId = this.resolveOptionalAssignee(parsed.assigneeId);
       const parentId = this.resolveOptionalParent(parsed.parentId);
+      const type = parsed.type ?? (parentId === null ? DEFAULT_TOP_LEVEL_WORK_ITEM_TYPE : DEFAULT_CHILD_WORK_ITEM_TYPE);
+      if (type === "task" && parentId === null) throw new ValidationError("A Task must have a parent.");
       const labels = parsed.labels.length > 0 ? this.resolveLabelNames(parsed.labels) : [];
       const row = createItemRow(this.db, {
         title: parsed.title,
@@ -250,6 +304,7 @@ export class WorkboardService {
         updatedAt: now,
         closedAt: null,
         parentId,
+        workItemType: type,
       });
       if (labels.length > 0) setItemLabels(this.db, row.id, labels.map((label) => label.id));
       replaceItemMentions(this.db, row.id, this.mentionIds(parsed.body), now);
@@ -281,6 +336,13 @@ export class WorkboardService {
         entries: [],
       };
       const changed: string[] = [];
+      const nextParent = parsed.parentId !== undefined
+        ? this.resolveOptionalParent(parsed.parentId, itemId)
+        : current.parent_id;
+      const nextType = parsed.type ?? current.work_item_type;
+      if (nextType === "task" && nextParent === null) {
+        throw new ValidationError("A Task must have a parent.");
+      }
 
       if (parsed.title !== undefined && parsed.title !== current.title) {
         changes.fields.title = parsed.title;
@@ -317,17 +379,19 @@ export class WorkboardService {
           });
         }
       }
-      if (parsed.parentId !== undefined) {
-        const nextParent = this.resolveOptionalParent(parsed.parentId, itemId);
-        if (nextParent !== current.parent_id) {
-          changes.fields.parentId = nextParent;
-          changed.push("parent");
-          changes.entries.push({
-            field: "parent",
-            oldValue: this.describeParent(current.parent_id),
-            newValue: this.describeParent(nextParent),
-          });
-        }
+      if (parsed.parentId !== undefined && nextParent !== current.parent_id) {
+        changes.fields.parentId = nextParent;
+        changed.push("parent");
+        changes.entries.push({
+          field: "parent",
+          oldValue: this.describeParent(current.parent_id),
+          newValue: this.describeParent(nextParent),
+        });
+      }
+      if (parsed.type !== undefined && nextType !== current.work_item_type) {
+        changes.fields.workItemType = nextType;
+        changed.push("type");
+        changes.entries.push({ field: "type", oldValue: current.work_item_type, newValue: nextType });
       }
 
       let labelsChanged = false;
@@ -353,7 +417,18 @@ export class WorkboardService {
         if (labelsChanged) changed.push("labels");
       }
 
-      const hasFieldChanges = Object.keys(changes.fields).length > 0;
+      if (parsed.parentId !== undefined && nextParent !== current.parent_id) {
+        // A Task cannot be detached at the database boundary. When one atomic
+        // service patch changes it away from Task and removes its parent, apply
+        // the type first inside this same transaction, then perform the move.
+        if (current.work_item_type === "task" && nextType !== "task" && parsed.type !== undefined) {
+          updateItemRow(this.db, itemId, { workItemType: nextType }, now);
+          delete changes.fields.workItemType;
+        }
+        moveItemInBacklog(this.db, { itemId, parentId: nextParent, beforeId: null });
+        delete changes.fields.parentId;
+      }
+      const hasFieldChanges = changed.length > 0;
       if (!hasFieldChanges && !labelsChanged) {
         return []; // No-op: no history, no timestamp churn.
       }
@@ -382,9 +457,122 @@ export class WorkboardService {
   deleteItem(actor: Actor, itemId: number): void {
     void actor;
     parseInput(positiveIdSchema, itemId);
+    if (getItemById(this.db, itemId) === null) throw new NotFoundError("item", itemId);
+    if (listItems(this.db, { parentId: itemId, limit: 1 }).items.length > 0) {
+      throw new ConflictError("Reparent or delete this item's children before deleting it.");
+    }
     const deleted = this.db.transaction(() => deleteItemRow(this.db, itemId))();
     if (!deleted) throw new NotFoundError("item", itemId);
     this.events?.publish("item.deleted", itemId);
+  }
+
+  createRelationship(actor: Actor, itemId: number, input: unknown): ItemDetailDto {
+    parseInput(positiveIdSchema, itemId);
+    const parsed = parseInput(createItemRelationshipInputSchema, input);
+    const source = getItemById(this.db, itemId);
+    if (source === null) throw new NotFoundError("item", itemId);
+    if (getItemById(this.db, parsed.itemId) === null) throw new NotFoundError("item", parsed.itemId);
+    const stored = relationshipStorage(parsed.name, itemId, parsed.itemId);
+    const now = this.clock.now();
+    this.db.transaction(() => {
+      createItemLink(this.db, {
+        kind: stored.kind,
+        sourceItemId: stored.sourceItemId,
+        targetItemId: stored.targetItemId,
+        createdBy: actor.participantId,
+        createdAt: now,
+      });
+      this.appendRelationshipHistory(actor.participantId, itemId, "relationship.added", parsed.name, parsed.itemId, now);
+      this.appendRelationshipHistory(
+        actor.participantId,
+        parsed.itemId,
+        "relationship.added",
+        inverseRelationship(parsed.name),
+        itemId,
+        now,
+      );
+    })();
+    this.events?.publish("item.updated", itemId);
+    this.events?.publish("item.updated", parsed.itemId);
+    return this.buildDetail(itemId);
+  }
+
+  deleteRelationship(actor: Actor, itemId: number, input: unknown): ItemDetailDto {
+    parseInput(positiveIdSchema, itemId);
+    const parsed = parseInput(deleteItemRelationshipInputSchema, input);
+    const now = this.clock.now();
+    const otherItemId = this.db.transaction(() => {
+      const link = getItemLinkById(this.db, parsed.relationshipId);
+      if (link === null || (link.source_item_id !== itemId && link.target_item_id !== itemId)) {
+        throw new NotFoundError("relationship", parsed.relationshipId);
+      }
+      const otherId = link.source_item_id === itemId ? link.target_item_id : link.source_item_id;
+      const currentName = relationshipNameFor(link, itemId);
+      if (!deleteItemLink(this.db, link.id)) throw new NotFoundError("relationship", link.id);
+      this.appendRelationshipHistory(actor.participantId, itemId, "relationship.removed", currentName, otherId, now);
+      this.appendRelationshipHistory(
+        actor.participantId,
+        otherId,
+        "relationship.removed",
+        inverseRelationship(currentName),
+        itemId,
+        now,
+      );
+      return otherId;
+    })();
+    this.events?.publish("item.updated", itemId);
+    this.events?.publish("item.updated", otherItemId);
+    return this.buildDetail(itemId);
+  }
+
+  reorderItem(actor: Actor, itemId: number, input: unknown): ReorderItemResult {
+    parseInput(positiveIdSchema, itemId);
+    const parsed = parseInput(reorderItemInputSchema, input);
+    const current = getItemById(this.db, itemId);
+    if (current === null) throw new NotFoundError("item", itemId);
+    const parentId = this.resolveOptionalParent(parsed.parentId ?? null, itemId);
+    if (current.work_item_type === "task" && parentId === null) {
+      throw new ValidationError("A Task must have a parent.");
+    }
+    const now = this.clock.now();
+    const result = this.db.transaction(() => {
+      const moved = moveItemInBacklog(this.db, {
+        itemId,
+        parentId,
+        beforeId: parsed.beforeId ?? null,
+      });
+      updateItemRow(this.db, itemId, {}, now);
+      if (current.parent_id !== parentId) {
+        appendHistory(this.db, {
+          itemId,
+          actorId: actor.participantId,
+          field: "parent",
+          oldValue: this.describeParent(current.parent_id),
+          newValue: this.describeParent(parentId),
+          createdAt: now,
+        });
+      }
+      appendHistory(this.db, {
+        itemId,
+        actorId: actor.participantId,
+        field: "backlogPosition",
+        oldValue: String(current.backlog_position),
+        newValue: String(moved.backlogPosition),
+        createdAt: now,
+      });
+      return moved;
+    })();
+    this.events?.publish("item.updated", itemId);
+    const all = this.listBacklog(actor);
+    return {
+      item: this.buildDetail(itemId).item,
+      itemId,
+      parentId,
+      backlogPosition: result.backlogPosition,
+      changedFields: current.parent_id === parentId ? ["backlogPosition"] : ["parent", "backlogPosition"],
+      siblings: all.filter((item) => item.parentId === parentId),
+      previousSiblings: current.parent_id === parentId ? [] : all.filter((item) => item.parentId === current.parent_id),
+    };
   }
 
   addComment(actor: Actor, itemId: number, input: unknown): { comment: CommentDto; mentionedParticipants: readonly ParticipantDto[] } {
@@ -456,6 +644,73 @@ export class WorkboardService {
 
   // ---------------------------------------------------------------- helpers
 
+  private buildDetail(itemId: number): ItemDetailDto {
+    const row = getItemJoined(this.db, itemId);
+    if (row === null) throw new NotFoundError("item", itemId);
+    const parentRow = row.parent_id === null ? null : getItemJoined(this.db, row.parent_id);
+    const childRows = listItems(this.db, { parentId: itemId, limit: 100_000 }).items;
+    const links = listItemLinks(this.db, itemId);
+    const linkedRows = new Map<number, ReturnType<typeof getItemJoined>>();
+    for (const link of links) {
+      const otherId = link.source_item_id === itemId ? link.target_item_id : link.source_item_id;
+      linkedRows.set(otherId, getItemJoined(this.db, otherId));
+    }
+    const relatedIds = [
+      itemId,
+      ...(parentRow === null ? [] : [parentRow.id]),
+      ...childRows.map((child) => child.id),
+      ...linkedRows.keys(),
+    ];
+    const labelMap = labelsForItems(this.db, relatedIds);
+    const itemDto = (joined: NonNullable<ReturnType<typeof getItemJoined>>): ItemDto =>
+      toItemDto(joined, toLabelDtos(labelMap.get(joined.id) ?? []));
+    const relationshipDtos: ItemRelationshipDto[] = [];
+    for (const link of links) {
+      const otherId = link.source_item_id === itemId ? link.target_item_id : link.source_item_id;
+      const other = linkedRows.get(otherId);
+      if (other === null || other === undefined) continue;
+      relationshipDtos.push({
+        id: link.id,
+        name: relationshipNameFor(link, itemId),
+        item: itemDto(other),
+        createdAt: link.created_at,
+      });
+    }
+    const duplicateOf = relationshipDtos.find((entry) => entry.name === "duplicate_of") ?? null;
+    return {
+      item: itemDto(row),
+      parent: parentRow === null ? null : itemDto(parentRow),
+      children: childRows.map(itemDto),
+      related: relationshipDtos.filter((entry) => entry.name === "related"),
+      predecessors: relationshipDtos.filter((entry) => entry.name === "predecessor"),
+      successors: relationshipDtos.filter((entry) => entry.name === "successor"),
+      duplicates: relationshipDtos.filter((entry) => entry.name === "duplicate"),
+      duplicateOf,
+      comments: listComments(this.db, itemId, { limit: DETAIL_COMMENT_LIMIT }).comments.map(toCommentDto),
+      history: listHistory(this.db, itemId, { limit: DETAIL_HISTORY_LIMIT }).entries.map(toHistoryEntryDto),
+    };
+  }
+
+  private appendRelationshipHistory(
+    actorId: number,
+    itemId: number,
+    field: "relationship.added" | "relationship.removed",
+    name: ItemRelationshipName,
+    otherItemId: number,
+    createdAt: string,
+  ): void {
+    const descriptor = JSON.stringify({ name, itemId: otherItemId });
+    appendHistory(this.db, {
+      itemId,
+      actorId,
+      field,
+      oldValue: field === "relationship.removed" ? descriptor : null,
+      newValue: field === "relationship.added" ? descriptor : null,
+      createdAt,
+    });
+    updateItemRow(this.db, itemId, {}, createdAt);
+  }
+
   private mentionIds(text: string): number[] {
     return this.resolveMentionParticipants(text).map((participant) => participant.id);
   }
@@ -515,6 +770,44 @@ export class WorkboardService {
     const row = getLabelByName(this.db, name);
     if (row === null) throw new NotFoundError("label", name);
     return row;
+  }
+}
+
+function relationshipStorage(
+  name: ItemRelationshipName,
+  itemId: number,
+  otherItemId: number,
+): { readonly kind: StoredItemLinkKind; readonly sourceItemId: number; readonly targetItemId: number } {
+  switch (name) {
+    case "related":
+      return { kind: "related", sourceItemId: itemId, targetItemId: otherItemId };
+    case "successor":
+      return { kind: "dependency", sourceItemId: itemId, targetItemId: otherItemId };
+    case "predecessor":
+      return { kind: "dependency", sourceItemId: otherItemId, targetItemId: itemId };
+    case "duplicate_of":
+      return { kind: "duplicate", sourceItemId: itemId, targetItemId: otherItemId };
+    case "duplicate":
+      return { kind: "duplicate", sourceItemId: otherItemId, targetItemId: itemId };
+    default:
+      throw new ValidationError("Parent and child relationships must be changed through parentId.");
+  }
+}
+
+function relationshipNameFor(link: ItemLinkRow, itemId: number): ItemRelationshipName {
+  const direction = link.source_item_id === itemId ? "outgoing" : "incoming";
+  return RELATIONSHIPS_BY_LINK[link.kind][direction];
+}
+
+function inverseRelationship(name: ItemRelationshipName): ItemRelationshipName {
+  switch (name) {
+    case "parent": return "child";
+    case "child": return "parent";
+    case "predecessor": return "successor";
+    case "successor": return "predecessor";
+    case "duplicate": return "duplicate_of";
+    case "duplicate_of": return "duplicate";
+    default: return "related";
   }
 }
 

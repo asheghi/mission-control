@@ -49,6 +49,8 @@ function validItem(): Record<string, unknown> {
     id: 7,
     title: "Migrate the list view",
     status: "doing",
+    type: "bug",
+    backlogPosition: 1,
     priority: 2,
     labels: [{ id: 3, name: "phase-d" }, { id: 9, name: "web" }],
     assignee: { id: 11, name: "reviewer", kind: "agent" },
@@ -85,7 +87,7 @@ function serverCursor(updatedAt: string, id: number): string {
   return Buffer.from(JSON.stringify([updatedAt, id]), "utf8").toString("base64url");
 }
 
-const EVERY_FIELD = ["id", "title", "status", "priority", "labels", "assignee"] as const;
+const EVERY_FIELD = ["id", "title", "status", "type", "backlogPosition", "priority", "labels", "assignee"] as const;
 
 // --- complete valid normalization --------------------------------------------
 
@@ -110,12 +112,14 @@ describe("listPageFromResponse accepts a complete valid page", () => {
       id: 7,
       title: "Migrate the list view",
       status: "doing" as WorkStatus,
+      type: "bug" as const,
+      backlogPosition: 1,
       priority: 2 as Priority,
       labels: [{ id: 3, name: "phase-d" }, { id: 9, name: "web" }],
       assignee: { id: 11, name: "reviewer", kind: "agent" },
     }]);
     expect(Object.keys(result!.items[0]!).sort()).toEqual(
-      ["assignee", "id", "labels", "priority", "status", "title"],
+      ["assignee", "backlogPosition", "id", "labels", "priority", "status", "title", "type"],
     );
     expect(result?.nextCursor).toBeNull();
   });
@@ -329,14 +333,14 @@ describe("pagination cursor and filter state the list sends back", () => {
   test("the restored filter state is a valid status or empty", () => {
     const loaded = store.load();
     expect(loaded.status === "" || LIST_STATUSES.some((status) => status === loaded.status)).toBe(true);
-    expect(Object.keys(loaded).sort()).toEqual(["assignee", "label", "q", "status"]);
+    expect(Object.keys(loaded).sort()).toEqual(["assignee", "label", "q", "status", "type"]);
 
     // The guard the hook applies to a restored status is exactly this predicate:
     // a stale value is replaced by "" rather than kept, and the three filters
     // beside it are untouched.
     const stale = { ...emptyFilters(), status: "archived", assignee: "11", label: "phase-d", q: "retry" };
     const corrected = store.set({ ...stale, status: "" });
-    expect(corrected).toEqual({ status: "", assignee: "11", label: "phase-d", q: "retry" });
+    expect(corrected).toEqual({ status: "", type: "", assignee: "11", label: "phase-d", q: "retry" });
     expect(store.reset()).toEqual(emptyFilters());
     expect(store.load()).toEqual(emptyFilters());
   });
@@ -445,7 +449,7 @@ describe("the accepted page is safe to render", () => {
     expect(result).not.toBeNull();
     const item = result!.items[0] as ListItem;
     expect(Object.keys(item).sort()).toEqual(
-      ["assignee", "id", "labels", "priority", "status", "title"],
+      ["assignee", "backlogPosition", "id", "labels", "priority", "status", "title", "type"],
     );
     expect((item as unknown as Record<string, unknown>).injected).toBeUndefined();
   });

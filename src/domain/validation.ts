@@ -3,6 +3,18 @@ import { ValidationError } from "./errors";
 
 export const participantKindSchema = z.enum(["human", "agent"]);
 export const workStatusSchema = z.enum(["todo", "doing", "blocked", "done"]);
+// Stored and wire values for work-item types. The order matches
+// WORK_ITEM_TYPES so the accepted set and the domain constant cannot drift.
+export const workItemTypeSchema = z.enum(["feature", "user_story", "bug", "task"]);
+// Relationship names as a caller expresses them relative to one item. The
+// hierarchy names (parent/child) are structural and are not link relations.
+export const itemRelationshipNameSchema = z.enum([
+  "related",
+  "predecessor",
+  "successor",
+  "duplicate",
+  "duplicate_of",
+]);
 export const prioritySchema = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
 export const positiveIdSchema = z.number().int().positive();
 export const handleSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/, "Use a 1-64 character ASCII handle.");

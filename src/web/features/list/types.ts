@@ -1,9 +1,10 @@
-import type { ParticipantKind, Priority, WorkStatus } from "../../../domain/types";
+import type { ParticipantKind, Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 
 export const LIST_STATUSES = ["todo", "doing", "blocked", "done"] as const satisfies readonly WorkStatus[];
 
 export interface ListFilters {
   status: string;
+  type: string;
   assignee: string;
   label: string;
   q: string;
@@ -27,6 +28,8 @@ export interface ListItem {
   readonly id: number;
   readonly title: string;
   readonly status: WorkStatus;
+  readonly type: WorkItemType;
+  readonly backlogPosition: number;
   readonly priority: Priority;
   readonly assignee: ListAssignee | null;
   readonly labels: readonly ListLabel[];

@@ -13,6 +13,7 @@ export interface ItemRouteDeps {
 export function registerItemRoutes(router: HttpRouter, deps: ItemRouteDeps): void {
   router.add("GET", "/api/items", (ctx) => {
     const status = single(ctx.url, "status");
+    const type = single(ctx.url, "type");
     const assignee = single(ctx.url, "assignee");
     const label = single(ctx.url, "label");
     const q = single(ctx.url, "q");
@@ -20,6 +21,7 @@ export function registerItemRoutes(router: HttpRouter, deps: ItemRouteDeps): voi
     const cursor = single(ctx.url, "cursor");
     const raw: RawItemQuery = {
       ...(status !== undefined ? { status } : {}),
+      ...(type !== undefined ? { type } : {}),
       ...(assignee !== undefined ? { assignee } : {}),
       ...(label !== undefined ? { label } : {}),
       ...(q !== undefined ? { q } : {}),
@@ -34,6 +36,10 @@ export function registerItemRoutes(router: HttpRouter, deps: ItemRouteDeps): voi
     }
     const result = deps.service.listItems(ctx.actor, filter);
     return jsonSuccess(result.items, { nextCursor: result.nextCursor }, ctx.requestId);
+  });
+
+  router.add("GET", "/api/backlog", (ctx) => {
+    return jsonSuccess(deps.service.listBacklog(ctx.actor), undefined, ctx.requestId);
   });
 
   router.add("POST", "/api/items", async (ctx) => {
@@ -57,6 +63,35 @@ export function registerItemRoutes(router: HttpRouter, deps: ItemRouteDeps): voi
     const id = parseIdParam(ctx.params.id);
     deps.service.deleteItem(ctx.actor, id);
     return jsonSuccess({ id, deleted: true }, undefined, ctx.requestId);
+  });
+
+  router.add("POST", "/api/items/:id/relationships", async (ctx) => {
+    const input = await readJsonBody(ctx.request, deps.maxBodyBytes);
+    return jsonSuccess(
+      deps.service.createRelationship(ctx.actor, parseIdParam(ctx.params.id), input),
+      undefined,
+      ctx.requestId,
+      201,
+    );
+  });
+
+  router.add("DELETE", "/api/items/:id/relationships/:relationshipId", (ctx) => {
+    return jsonSuccess(
+      deps.service.deleteRelationship(ctx.actor, parseIdParam(ctx.params.id), {
+        relationshipId: parseIdParam(ctx.params.relationshipId),
+      }),
+      undefined,
+      ctx.requestId,
+    );
+  });
+
+  router.add("POST", "/api/items/:id/reorder", async (ctx) => {
+    const input = await readJsonBody(ctx.request, deps.maxBodyBytes);
+    return jsonSuccess(
+      deps.service.reorderItem(ctx.actor, parseIdParam(ctx.params.id), input),
+      undefined,
+      ctx.requestId,
+    );
   });
 
   router.add("POST", "/api/items/:id/comments", async (ctx) => {

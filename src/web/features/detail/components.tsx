@@ -1,8 +1,19 @@
 import type { ComponentChildren } from "preact";
 import { useMemo, useRef, useState } from "preact/hooks";
-import { boundDiff, diffLines, formatTime, tokenizeInline } from "./helpers";
-import { DETAIL_PRIORITIES, DETAIL_STATUSES, LABEL_NAME_MAX_LENGTH, LABEL_SET_MAX } from "./types";
-import type { BodyTab, DetailHistoryEntry, DetailParticipant, DetailState, DiffOperation, InlineToken } from "./types";
+import { ITEM_RELATIONSHIP_LABELS, WORK_ITEM_TYPE_LABELS } from "../../../domain/types";
+import { boundDiff, diffLines, formatTime, parseItemId, taskTypeAllowed, tokenizeInline } from "./helpers";
+import {
+  DETAIL_ADD_RELATIONSHIP_NAMES,
+  DETAIL_ADD_RELATIONSHIP_NONE,
+  DETAIL_DUPLICATE_OF_NAME,
+  DETAIL_PRIORITIES,
+  DETAIL_RELATIONSHIP_GROUPS,
+  DETAIL_STATUSES,
+  DETAIL_WORK_ITEM_TYPES,
+  LABEL_NAME_MAX_LENGTH,
+  LABEL_SET_MAX,
+} from "./types";
+import type { BodyTab, DetailHistoryEntry, DetailItem, DetailParticipant, DetailRelationship, DetailState, DiffOperation, InlineToken } from "./types";
 
 /** Shown when the participant roster could not be loaded. */
 export const ROSTER_UNAVAILABLE_NOTE = "Some assignment or label options could not be loaded.";
@@ -15,6 +26,20 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   blocked: "Blocked",
   done: "Done",
 };
+
+/**
+ * The label for a work-item type, tolerating a value the domain has no label
+ * for. A type the server sends that this build does not know is still shown
+ * verbatim rather than rendered as `undefined`.
+ */
+function typeLabel(type: string): string {
+  return WORK_ITEM_TYPE_LABELS[type as keyof typeof WORK_ITEM_TYPE_LABELS] ?? type;
+}
+
+/** The label for a relative relationship name, with the same tolerance. */
+function relationshipLabel(name: string): string {
+  return ITEM_RELATIONSHIP_LABELS[name as keyof typeof ITEM_RELATIONSHIP_LABELS] ?? name;
+}
 
 function InlineMarkdown({ token }: { token: InlineToken }) {
   if (token.kind === "text") return <>{token.text}</>;
@@ -109,9 +134,43 @@ export function FieldControls({ detail }: { detail: DetailState }) {
   const rosterUnavailable = assigneeId !== null && !assigneeIsKnown;
   const assigneeValue = assigneeId === null ? "" : String(assigneeId);
   const busy = detail.fieldsBusy;
+  // The server refuses a Task with no parent ("A Task must have a parent"), so
+  // the option is withheld from a top-level item rather than offered and then
+  // rejected. The rule is stated where the user can see it, so a missing option
+  // reads as a rule instead of a bug.
+  const taskAllowed = taskTypeAllowed(item.parentId);
+  const typeOptions = taskAllowed
+    ? DETAIL_WORK_ITEM_TYPES
+    : DETAIL_WORK_ITEM_TYPES.filter((type) => type !== "task");
+  // A type this build does not know must stay selected and visible: without its
+  // own option the browser would fall back to the first one and the control
+  // would misreport the item, exactly as an unknown assignee would.
+  const typeIsUnknown = !DETAIL_WORK_ITEM_TYPES.includes(item.type);
   return (
     <fieldset class="detail-controls card" aria-busy={busy}>
       <legend class="sr-only">Item fields</legend>
+      {/* The label names the control; the hint sits BESIDE it, not inside it.
+          A span nested in a <label> joins the accessible name, so the combobox
+          would be announced as "Type Task is available once this item has a
+          parent." — a sentence where a name belongs — and the aria-describedby
+          reference would then repeat it. The hint keeps its describedby role. */}
+      <label for="detail-type">Type</label>
+      <select id="detail-type" value={item.type} disabled={busy || detail.deleting} aria-describedby={taskAllowed ? undefined : "detail-type-note"} onChange={(event) => {
+        const type = DETAIL_WORK_ITEM_TYPES.find((candidate) => candidate === event.currentTarget.value);
+        // Guard the server's own invariant on the client too: a Task with no
+        // parent is a 400, and this control must not be able to cause one.
+        if (type !== undefined && type !== item.type && (type !== "task" || taskAllowed)) {
+          detail.patchField({ type });
+        }
+      }}>
+        {typeOptions.map((type) => <option key={type} value={type}>{typeLabel(type)}</option>)}
+        {typeIsUnknown ? <option value={item.type}>{typeLabel(item.type)}</option> : null}
+      </select>
+      {taskAllowed ? null : (
+        <span id="detail-type-note" class="detail-field-note muted">
+          {typeLabel("task")} is available once this item has a parent.
+        </span>
+      )}
       <label>Status
         <select value={item.status} disabled={busy || detail.deleting} onChange={(event) => {
           const status = DETAIL_STATUSES.find((candidate) => candidate === event.currentTarget.value);
@@ -162,58 +221,212 @@ export function FieldControls({ detail }: { detail: DetailState }) {
   );
 }
 
+/**
+ * One relationship row: the item's id, its type, its status, and its title,
+ * linked to that item's detail route.
+ *
+ * The link text carries the id and title, which is what a reader needs to
+ * identify the item; the type and status chips are beside it. Both facts are
+ * pushed into `aria-describedby` text as well, because a chip is a visual
+ * affordance — a screen-reader user must not have to infer "Bug / Blocked" from
+ * two adjacent labels the link does not own.
+ *
+ * `relationshipId` is supplied only for a group whose rows can be removed. A
+ * hierarchy row has no link id, so it gets no remove button rather than a
+ * button that would have to invent one.
+ */
+function RelationshipRow({ item, relationshipId, relationshipName, busy, onRemove }: {
+  item: DetailItem;
+  // Declared as `| undefined` rather than optional: `exactOptionalPropertyTypes`
+  // is on, and the caller passes these unconditionally, computing `undefined`
+  // for a hierarchy row that has no removable link.
+  relationshipId: number | undefined;
+  relationshipName: string;
+  busy: boolean;
+  onRemove: ((relationshipId: number) => void) | undefined;
+}) {
+  const descriptionId = `relationship-${item.id}-${relationshipName}-description`;
+  return (
+    <li class="relationship-row">
+      <span class="chip" aria-hidden="true">{typeLabel(item.type)}</span>
+      <span class={`chip status-chip status-${item.status}`} aria-hidden="true">{STATUS_LABELS[item.status] ?? item.status}</span>
+      <a href={`#/item/${item.id}`} aria-describedby={descriptionId}>#{item.id} {item.title}</a>
+      <span id={descriptionId} class="sr-only">
+        Type: {typeLabel(item.type)}. Status: {STATUS_LABELS[item.status] ?? item.status}. Priority P{item.priority}.{item.assignee === null ? " Unassigned." : ` Assigned to ${item.assignee.name}.`}
+      </span>
+      {relationshipId === undefined || onRemove === undefined ? null : (
+        <button
+          class="button-invisible relationship-remove"
+          type="button"
+          aria-label={`Remove ${relationshipLabel(relationshipName)} relationship with item #${item.id} ${item.title}`}
+          disabled={busy}
+          onClick={() => onRemove(relationshipId)}
+        >Remove</button>
+      )}
+    </li>
+  );
+}
+
+/** The placeholder shown by a relationship group that has no rows. */
+function RelationshipEmpty({ children }: { children: ComponentChildren }) {
+  return <p class="muted">{children}</p>;
+}
+
+/**
+ * Every relationship the item has, grouped by how it relates.
+ *
+ * The section has no local error state: `detail.notice` already carries the
+ * failure copy for a rejected add or remove into the view's one visible notice
+ * banner, so a second copy here would state the same failure twice.
+ */
 export function Relationships({ detail }: { detail: DetailState }) {
   const [parentDraft, setParentDraft] = useState("");
   const [subtaskDraft, setSubtaskDraft] = useState("");
-  const done = detail.subtasks.filter((item) => item.status === "done").length;
+  const [addName, setAddName] = useState<string>(DETAIL_ADD_RELATIONSHIP_NONE);
+  const [addItemId, setAddItemId] = useState("");
+  const busy = detail.relationshipsBusy;
+  const done = detail.children.filter((item) => item.status === "done").length;
+  const addItemIdIsValid = parseItemId(addItemId) !== null;
+  const addIsComplete = addName !== DETAIL_ADD_RELATIONSHIP_NONE && addItemIdIsValid;
+  const duplicateOf = detail.duplicateOf;
   return (
-    <section class="card detail-relationships" aria-labelledby="detail-relationships-heading" aria-busy={detail.relationshipsBusy}>
+    <section class="card detail-relationships" aria-labelledby="detail-relationships-heading" aria-busy={busy}>
       <div class="relationships-head">
         <h2 id="detail-relationships-heading">Relationships</h2>
-        <span class="chip">{done}/{detail.subtasks.length} sub-tasks done</span>
+        <span class="chip">{done}/{detail.children.length} children done</span>
       </div>
       <div class="relationship-parent">
-        <h3>Parent</h3>
-        {detail.parent === null ? <p class="muted">This is a top-level item.</p> : (
-          <div class="relationship-row">
-            <a href={`#/item/${detail.parent.id}`}>#{detail.parent.id} {detail.parent.title}</a>
-            <button class="button-invisible" type="button" disabled={detail.relationshipsBusy} onClick={() => detail.setParent(null)}>Remove</button>
-          </div>
+        <h3>{relationshipLabel("parent")}</h3>
+        {detail.parent === null ? <RelationshipEmpty>This is a top-level item.</RelationshipEmpty> : (
+          <ul class="relationship-list">
+            <RelationshipRow item={detail.parent} relationshipName="parent" relationshipId={undefined} onRemove={undefined} busy={busy} />
+          </ul>
         )}
+        {/* Detaching a Task is the one hierarchy edit the server refuses while
+            the item is still a Task, so the button is withheld rather than
+            offered and rejected. Changing the type first makes it available. */}
         {detail.parent === null ? (
           <form class="relationship-form" onSubmit={(event) => {
             event.preventDefault();
-            const parentId = Number(parentDraft);
-            if (Number.isSafeInteger(parentId) && parentId > 0) detail.setParent(parentId);
+            const parentId = parseItemId(parentDraft);
+            if (parentId !== null) detail.setParent(parentId);
           }}>
             <label for="detail-parent-id">Parent item ID</label>
-            <div><input id="detail-parent-id" inputMode="numeric" pattern="[0-9]+" value={parentDraft} placeholder="e.g. 42" disabled={detail.relationshipsBusy} onInput={(event) => setParentDraft(event.currentTarget.value)} /><button type="submit" disabled={detail.relationshipsBusy || !/^[1-9]\d*$/.test(parentDraft)}>Set parent</button></div>
+            <div><input id="detail-parent-id" inputMode="numeric" pattern="[0-9]+" value={parentDraft} placeholder="e.g. 42" disabled={busy} onInput={(event) => setParentDraft(event.currentTarget.value)} /><button type="submit" disabled={busy || parseItemId(parentDraft) === null}>Set parent</button></div>
           </form>
-        ) : null}
+        ) : detail.item !== null && detail.item.type === "task" ? (
+          <p class="muted">A {typeLabel("task")} must keep a parent. Change the type to detach it.</p>
+        ) : (
+          <button class="button-invisible" type="button" disabled={busy} onClick={() => detail.setParent(null)}>Remove parent</button>
+        )}
       </div>
-      <div class="relationship-subtasks">
-        <h3>Sub-tasks</h3>
-        {detail.subtasks.length === 0 ? <p class="muted">No sub-tasks yet.</p> : (
-          <ul>{detail.subtasks.map((subtask) => {
-            const descriptionId = `subtask-${subtask.id}-description`;
-            return (
-              <li key={subtask.id} class="relationship-row">
-                <span class={`chip status-chip status-${subtask.status}`} aria-hidden="true">{STATUS_LABELS[subtask.status]}</span>
-                <a href={`#/item/${subtask.id}`} aria-describedby={descriptionId}>#{subtask.id} {subtask.title}</a>
-                <span id={descriptionId} class="sr-only">Status: {STATUS_LABELS[subtask.status]}. Priority P{subtask.priority}.{subtask.assignee === null ? " Unassigned." : ` Assigned to ${subtask.assignee.name}.`}</span>
-              </li>
-            );
-          })}</ul>
+      <div class="relationship-children">
+        {/* A plural heading in words rather than `{label}ren`: the label map
+            is singular, and building it by concatenation would ship the heading
+            as two fragments a reader of the bundle cannot recognize. */}
+        <h3>Children</h3>
+        {detail.children.length === 0 ? <RelationshipEmpty>No children yet.</RelationshipEmpty> : (
+          <ul class="relationship-list">
+            {detail.children.map((child) => (
+              <RelationshipRow key={child.id} item={child} relationshipName="child" relationshipId={undefined} onRemove={undefined} busy={busy} />
+            ))}
+          </ul>
         )}
         <form class="quick-add relationship-add" onSubmit={(event) => {
           event.preventDefault();
           void detail.createSubtask(subtaskDraft).then((created) => { if (created) setSubtaskDraft(""); });
         }}>
-          <label class="sr-only" for="detail-subtask-title">Add a sub-task</label>
-          <input id="detail-subtask-title" value={subtaskDraft} maxLength={256} placeholder="Add a sub-task…" disabled={detail.relationshipsBusy} onInput={(event) => setSubtaskDraft(event.currentTarget.value)} />
-          <button type="submit" disabled={detail.relationshipsBusy || subtaskDraft.trim() === ""}>Add</button>
+          <label class="sr-only" for="detail-subtask-title">Add a child item</label>
+          <input id="detail-subtask-title" value={subtaskDraft} maxLength={256} placeholder="Add a child item…" disabled={busy} onInput={(event) => setSubtaskDraft(event.currentTarget.value)} />
+          <button type="submit" disabled={busy || subtaskDraft.trim() === ""}>Add</button>
         </form>
       </div>
+      {DETAIL_RELATIONSHIP_GROUPS.map((group) => {
+        const rows: readonly DetailRelationship[] = detail[group.key];
+        return (
+          <div key={group.key} class={`relationship-group relationship-${group.key}`}>
+            <h3>{relationshipLabel(group.name)}</h3>
+            {rows.length === 0 ? (
+              <RelationshipEmpty>No {relationshipLabel(group.name).toLowerCase()} items.</RelationshipEmpty>
+            ) : (
+              <ul class="relationship-list">
+                {rows.map((relationship) => (
+                  <RelationshipRow
+                    key={relationship.id}
+                    item={relationship.item}
+                    relationshipName={group.name}
+                    relationshipId={group.removable ? relationship.id : undefined}
+                    busy={busy}
+                    onRemove={group.removable ? detail.removeRelationship : undefined}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+      {/* `duplicate_of` is the mirror of `duplicates` and the only group whose
+          state holds one relationship rather than a list, so it is rendered
+          separately instead of being forced into the map above. */}
+      <div class="relationship-group relationship-duplicate-of">
+        <h3>{relationshipLabel(DETAIL_DUPLICATE_OF_NAME)}</h3>
+        {duplicateOf === null ? (
+          <RelationshipEmpty>This item is not a duplicate of another item.</RelationshipEmpty>
+        ) : (
+          <ul class="relationship-list">
+            <RelationshipRow
+              item={duplicateOf.item}
+              relationshipName={DETAIL_DUPLICATE_OF_NAME}
+              relationshipId={duplicateOf.id}
+              busy={busy}
+              onRemove={detail.removeRelationship}
+            />
+          </ul>
+        )}
+      </div>
+      {/* The one place a non-hierarchy link is created. `parent` and `child`
+          are absent from the list on purpose: the hierarchy has its own
+          controls above, and a second entry point for the same field could
+          disagree with them. */}
+      <form class="relationship-form relationship-add-link" onSubmit={(event) => {
+        event.preventDefault();
+        const name = DETAIL_ADD_RELATIONSHIP_NAMES.find((candidate) => candidate === addName);
+        const itemId = parseItemId(addItemId);
+        if (name === undefined || itemId === null) return;
+        detail.addRelationship(name, itemId);
+        setAddItemId("");
+      }}>
+        <label for="detail-relationship-name">Add relationship</label>
+        <label class="sr-only" for="detail-relationship-item-id">Related item ID</label>
+        <div class="relationship-add-fields">
+          <select
+            id="detail-relationship-name"
+            value={addName}
+            disabled={busy}
+            onChange={(event) => setAddName(event.currentTarget.value)}
+          >
+            <option value={DETAIL_ADD_RELATIONSHIP_NONE}>Relationship…</option>
+            {DETAIL_ADD_RELATIONSHIP_NAMES.map((name) => (
+              <option key={name} value={name}>{relationshipLabel(name)}</option>
+            ))}
+          </select>
+          <input
+            id="detail-relationship-item-id"
+            inputMode="numeric"
+            pattern="[0-9]+"
+            autoComplete="off"
+            value={addItemId}
+            placeholder="e.g. 42"
+            disabled={busy}
+            aria-invalid={addItemId !== "" && !addItemIdIsValid}
+            onInput={(event) => setAddItemId(event.currentTarget.value)}
+          />
+          <button type="submit" disabled={busy || !addIsComplete}>Add</button>
+        </div>
+        {addItemId === "" || addItemIdIsValid ? null : (
+          <span class="relationship-form-error">Enter the ID of an existing item, as a whole number.</span>
+        )}
+      </form>
     </section>
   );
 }

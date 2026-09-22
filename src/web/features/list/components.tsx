@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "preact/hooks";
+import { WORK_ITEM_TYPE_LABELS, WORK_ITEM_TYPES } from "../../../domain/types";
+import { workItemTypeBadge } from "../../views";
 import type { ListItem, ListState } from "./types";
 
 // Mirrors BOARD_COLUMN_LABELS so the same status never reads differently in the
@@ -71,6 +73,23 @@ export function FilterBar({ list }: FilterBarProps) {
         </select>
       </label>
       <label>
+        <span>Type</span>
+        <select
+          name="type"
+          autoComplete="off"
+          value={list.filters.type}
+          disabled={list.bulkBusy}
+          onChange={(event) => list.setFilter("type", event.currentTarget.value, true)}
+        >
+          <option value="">All types</option>
+          {/* The option values are the domain's wire types, so the control can
+              only ever offer a value the API accepts. */}
+          {WORK_ITEM_TYPES.map((type) => (
+            <option key={type} value={type}>{WORK_ITEM_TYPE_LABELS[type]}</option>
+          ))}
+        </select>
+      </label>
+      <label>
         <span>Assignee</span>
         <select
           name="assignee"
@@ -120,6 +139,7 @@ export function FilterBar({ list }: FilterBarProps) {
 }
 
 function ItemRow({ item, list }: { item: ListItem; list: ListState }) {
+  const typeBadge = workItemTypeBadge(item.type);
   return (
     <tr data-id={String(item.id)}>
       <td class="cell-check">
@@ -137,6 +157,11 @@ function ItemRow({ item, list }: { item: ListItem; list: ListState }) {
       <td class="muted" data-label="ID"><a class="list-item-id" href={`#/item/${item.id}`}>#{item.id}</a></td>
       <td data-label="Title"><a class="list-item-title" href={`#/item/${item.id}`}>{item.title}</a></td>
       <td data-label="Status"><span class={`chip status-chip status-${item.status}`}>{STATUS_LABELS[item.status] ?? item.status}</span></td>
+      <td data-label="Type">
+        <span class={typeBadge.className} title={typeBadge.label}>
+          <span class="type-mark" aria-hidden="true">{typeBadge.mark}</span>{typeBadge.label}
+        </span>
+      </td>
       <td data-label="Priority"><span class={`chip p${item.priority}`}>P{item.priority}</span></td>
       <td data-label="Assignee">
         {item.assignee === null
@@ -185,6 +210,7 @@ export function ItemTable({ list }: { list: ListState }) {
             <th scope="col">ID</th>
             <th scope="col">Title</th>
             <th scope="col">Status</th>
+            <th scope="col">Type</th>
             <th scope="col">Priority</th>
             <th scope="col">Assignee</th>
             <th scope="col">Labels</th>
@@ -193,10 +219,10 @@ export function ItemTable({ list }: { list: ListState }) {
         <tbody>
           {list.items.map((item) => <ItemRow key={item.id} item={item} list={list} />)}
           {!list.loading && list.items.length === 0 ? (
-            <tr class="list-empty-row"><td colSpan={7}><div class="empty-state"><strong>{hasFilters ? "No work items match these filters." : "No work items yet"}</strong><span>{hasFilters ? "Try broadening or clearing your filters." : "New work will appear here when it is created."}</span></div></td></tr>
+            <tr class="list-empty-row"><td colSpan={8}><div class="empty-state"><strong>{hasFilters ? "No work items match these filters." : "No work items yet"}</strong><span>{hasFilters ? "Try broadening or clearing your filters." : "New work will appear here when it is created."}</span></div></td></tr>
           ) : null}
           {list.loading && list.items.length === 0 ? (
-            <tr class="list-empty-row"><td colSpan={7}><div class="empty-state"><strong>Loading work items…</strong><span>Preparing the current view.</span></div></td></tr>
+            <tr class="list-empty-row"><td colSpan={8}><div class="empty-state"><strong>Loading work items…</strong><span>Preparing the current view.</span></div></td></tr>
           ) : null}
         </tbody>
       </table>

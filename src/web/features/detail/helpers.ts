@@ -129,6 +129,37 @@ export function checkLabelAdd(raw: string, selected: readonly string[]): LabelAd
   return { ok: true, name };
 }
 
+/** Positive-integer text, as every item-id input in the view accepts it. */
+const ITEM_ID_PATTERN = /^[1-9]\d*$/;
+
+/**
+ * Parse a user-typed item id, or null when it cannot be sent.
+ *
+ * The id controls are text inputs with `inputMode="numeric"` rather than
+ * `type="number"`, so the value is whatever the user typed: leading zeros,
+ * `1.5`, `1e3`, `-1`, `0`, a Unicode digit, and an empty string all have to be
+ * refused here. `Number.isSafeInteger` alone would accept `1e3`, `1.0`, and
+ * `0x10`; the pattern alone would accept an id past `Number.MAX_SAFE_INTEGER`.
+ * Both are required, and a valid id is positive — the API has no id 0.
+ */
+export function parseItemId(raw: string): number | null {
+  const value = String(raw ?? "").trim();
+  if (!ITEM_ID_PATTERN.test(value)) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/**
+ * Whether this item's type may be set to `task`.
+ *
+ * A Task must have a parent (`src/app/workboard.ts` rejects one without), so a
+ * top-level item cannot offer the option. Stated once here because both the
+ * type control and the hierarchy controls depend on the same rule.
+ */
+export function taskTypeAllowed(parentId: number | null): boolean {
+  return parentId !== null;
+}
+
 /**
  * Deduplicate and validate a whole label set before it is sent. Names that
  * cannot be sent are dropped, so an over-long or blank entry can never turn a

@@ -694,17 +694,20 @@ describe("compiled binary (bun run build first; skipped otherwise)", () => {
       });
       expect(tools.status).toBe(200);
       const toolsBody = (await tools.json()) as { result: { tools: { name: string }[] } };
-      // Exact contract, not a subset: the binary advertises the six tools and
+      // Exact contract, not a subset: the binary advertises the nine tools and
       // nothing else, so a missing or accidentally extra tool fails here.
       expect(toolsBody.result.tools.map((tool) => tool.name).sort()).toEqual([
+        "add_work_relationship",
         "comment",
         "create_work",
         "get_work",
         "list_work",
         "my_work",
+        "remove_work_relationship",
+        "reorder_work",
         "update_work",
       ]);
-      expect(toolsBody.result.tools.length).toBe(6);
+      expect(toolsBody.result.tools.length).toBe(9);
 
       // SIGTERM graceful shutdown (also required by the Task 19 matrix).
       server.kill("SIGTERM");

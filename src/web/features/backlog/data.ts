@@ -1,4 +1,5 @@
-import type { Priority } from "../../../domain/types";
+import { WORK_ITEM_TYPES, WORK_STATUSES } from "../../../domain/types";
+import type { Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 import type { BacklogGroup, BacklogItem } from "./types";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -8,8 +9,11 @@ function id(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 function item(value: unknown): BacklogItem | null {
-  if (!record(value) || !id(value.id) || typeof value.title !== "string" || value.status !== "todo"
+  if (!record(value) || !id(value.id) || typeof value.title !== "string"
+    || typeof value.type !== "string" || !(WORK_ITEM_TYPES as readonly string[]).includes(value.type)
+    || typeof value.status !== "string" || !(WORK_STATUSES as readonly string[]).includes(value.status) || value.status === "done"
     || typeof value.priority !== "number" || ![0, 1, 2, 3].includes(value.priority)
+    || typeof value.backlogPosition !== "number" || !Number.isSafeInteger(value.backlogPosition) || value.backlogPosition < 0
     || (value.parentId !== undefined && value.parentId !== null && !id(value.parentId)) || !Array.isArray(value.labels)) return null;
   const labels: Array<{ id: number; name: string }> = [];
   for (const candidate of value.labels) {
@@ -22,14 +26,24 @@ function item(value: unknown): BacklogItem | null {
       || (value.assignee.kind !== "human" && value.assignee.kind !== "agent")) return null;
     assignee = { id: value.assignee.id, name: value.assignee.name, kind: value.assignee.kind };
   }
-  return { id: value.id, title: value.title, priority: value.priority as Priority, parentId: value.parentId === undefined ? null : value.parentId, assignee, labels };
+  return {
+    id: value.id,
+    title: value.title,
+    type: value.type as WorkItemType,
+    status: value.status as WorkStatus,
+    priority: value.priority as Priority,
+    parentId: value.parentId === undefined ? null : value.parentId,
+    backlogPosition: value.backlogPosition,
+    assignee,
+    labels,
+  };
 }
 
 export interface BacklogPage { readonly items: readonly BacklogItem[]; readonly nextCursor: string | null }
 
 export function backlogPageFromResponse(value: unknown): BacklogPage | null {
-  if (!record(value) || !Array.isArray(value.data) || !record(value.meta)) return null;
-  const nextCursor = value.meta.nextCursor;
+  if (!record(value) || !Array.isArray(value.data)) return null;
+  const nextCursor = record(value.meta) ? value.meta.nextCursor ?? null : null;
   if (nextCursor !== null && (typeof nextCursor !== "string" || nextCursor.length === 0 || nextCursor.length > 2_048)) return null;
   const result: BacklogItem[] = [];
   const ids = new Set<number>();
@@ -50,7 +64,7 @@ export function groupBacklog(items: readonly BacklogItem[]): readonly BacklogGro
   const byId = new Map(items.map((entry) => [entry.id, entry]));
   const children = new Map<number, BacklogItem[]>();
   const roots: BacklogItem[] = [];
-  const order = (left: BacklogItem, right: BacklogItem) => left.priority - right.priority || right.id - left.id;
+  const order = (left: BacklogItem, right: BacklogItem) => left.backlogPosition - right.backlogPosition || left.id - right.id;
 
   for (const entry of items) {
     if (entry.parentId !== null && entry.parentId !== entry.id && byId.has(entry.parentId)) {

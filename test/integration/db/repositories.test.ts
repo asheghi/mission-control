@@ -23,7 +23,7 @@ import {
 import { listMentionsForItem, listMentionedParticipantIds, replaceCommentMentions, replaceItemMentions } from "../../../src/db/repositories/mentions";
 import { createParticipant, getParticipantById, getParticipantByName, listParticipants } from "../../../src/db/repositories/participants";
 import { createToken, findTokenByDigest, revokeToken, touchToken } from "../../../src/db/repositories/tokens";
-import type { Priority, WorkStatus } from "../../../src/domain/types";
+import type { Priority, WorkItemType, WorkStatus } from "../../../src/domain/types";
 import { withTempDataDir } from "../../helpers/temp-dir";
 
 function makeParticipant(db: Database, name: string, kind: "human" | "agent" = "human") {
@@ -43,6 +43,7 @@ function makeItem(
     readonly updatedAt?: string;
     readonly closedAt?: string | null;
     readonly parentId?: number | null;
+    readonly workItemType?: WorkItemType;
   } = {},
 ) {
   return createItem(db, {
@@ -56,6 +57,7 @@ function makeItem(
     updatedAt: overrides.updatedAt ?? overrides.createdAt ?? "2026-01-01T00:00:00.000Z",
     closedAt: overrides.closedAt ?? null,
     parentId: overrides.parentId ?? null,
+    workItemType: overrides.workItemType ?? "user_story",
   });
 }
 

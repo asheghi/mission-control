@@ -13,6 +13,7 @@
 // change.
 import { describe, expect, test } from "bun:test";
 import type { Priority, WorkStatus } from "../../../src/domain/types";
+import { WORK_ITEM_TYPES, WORK_ITEM_TYPE_LABELS } from "../../../src/domain/types";
 import {
   boardItem,
   boardItemFromResponse,
@@ -24,6 +25,7 @@ import {
   validateInternalDragId,
 } from "../../../src/web/features/board/data";
 import { BOARD_STATUSES } from "../../../src/web/features/board/types";
+import { workItemTypeBadge } from "../../../src/web/views";
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -37,6 +39,8 @@ function validItem(): Record<string, unknown> {
     id: 7,
     title: "Ship the typed board",
     status: "doing",
+    type: "user_story",
+    backlogPosition: 3,
     priority: 2,
     labels: [{ id: 3, name: "phase-c" }, { id: 9, name: "web" }],
     commentCount: 4,
@@ -56,7 +60,7 @@ function withoutField(field: string): Record<string, unknown> {
   return item;
 }
 
-const EVERY_FIELD = ["id", "title", "status", "priority", "labels", "commentCount", "assignee"] as const;
+const EVERY_FIELD = ["id", "title", "status", "type", "backlogPosition", "priority", "labels", "commentCount", "assignee"] as const;
 
 // --- complete valid normalization --------------------------------------------
 
@@ -79,6 +83,8 @@ describe("boardItem accepts a complete valid DTO", () => {
       id: 7,
       title: "Ship the typed board",
       status: "doing" as WorkStatus,
+      type: "user_story" as const,
+      backlogPosition: 3,
       priority: 2 as Priority,
       labels: [{ id: 3, name: "phase-c" }, { id: 9, name: "web" }],
       commentCount: 4,
@@ -86,7 +92,7 @@ describe("boardItem accepts a complete valid DTO", () => {
     });
     // Only the consumed keys exist — no pass-through of unmapped wire fields.
     expect(Object.keys(item!).sort()).toEqual(
-      ["assignee", "commentCount", "id", "labels", "priority", "status", "title"],
+      ["assignee", "backlogPosition", "commentCount", "id", "labels", "priority", "status", "title", "type"],
     );
   });
 

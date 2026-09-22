@@ -1,4 +1,5 @@
-import type { Priority, WorkStatus } from "../../../domain/types";
+import { ITEM_RELATIONSHIP_NAMES, WORK_ITEM_TYPES } from "../../../domain/types";
+import type { ItemRelationshipName, Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 import { DETAIL_PRIORITIES, DETAIL_STATUSES } from "./types";
 import type {
   DetailComment,
@@ -7,6 +8,7 @@ import type {
   DetailLabel,
   DetailParticipant,
   DetailPayload,
+  DetailRelationship,
 } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -42,7 +44,10 @@ function labelFromValue(value: unknown): DetailLabel | null {
 
 function itemFromValue(value: unknown): DetailItem | null {
   if (!isRecord(value) || !isId(value.id) || typeof value.title !== "string" || typeof value.body !== "string"
-    || !isStatus(value.status) || !isPriority(value.priority) || !isTimestamp(value.createdAt)
+    || !isStatus(value.status) || !isPriority(value.priority)
+    || typeof value.type !== "string" || !(WORK_ITEM_TYPES as readonly string[]).includes(value.type)
+    || typeof value.backlogPosition !== "number" || !Number.isSafeInteger(value.backlogPosition) || value.backlogPosition < 0
+    || !isTimestamp(value.createdAt)
     || !isTimestamp(value.updatedAt) || (value.closedAt !== null && !isTimestamp(value.closedAt))
     || (value.parentId !== undefined && value.parentId !== null && !isId(value.parentId)) || !Array.isArray(value.labels)) return null;
   const assignee = value.assignee === null ? null : participantFromValue(value.assignee);
@@ -58,6 +63,8 @@ function itemFromValue(value: unknown): DetailItem | null {
     title: value.title,
     body: value.body,
     status: value.status,
+    type: value.type as WorkItemType,
+    backlogPosition: value.backlogPosition,
     priority: value.priority,
     assignee,
     createdAt: value.createdAt,
@@ -93,20 +100,51 @@ function historyFromValue(value: unknown): DetailHistoryEntry | null {
   };
 }
 
+function relationshipFromValue(value: unknown): DetailRelationship | null {
+  if (!isRecord(value) || !isId(value.id) || typeof value.name !== "string"
+    || !(ITEM_RELATIONSHIP_NAMES as readonly string[]).includes(value.name)
+    || !isTimestamp(value.createdAt)) return null;
+  const item = itemFromValue(value.item);
+  return item === null ? null : {
+    id: value.id,
+    name: value.name as ItemRelationshipName,
+    item,
+    createdAt: value.createdAt,
+  };
+}
+
 export function detailFromResponse(response: unknown): DetailPayload | null {
   if (!isRecord(response) || !isRecord(response.data) || !Array.isArray(response.data.comments)
-    || !Array.isArray(response.data.history)
-    || (response.data.subtasks !== undefined && !Array.isArray(response.data.subtasks))) return null;
+    || !Array.isArray(response.data.history) || !Array.isArray(response.data.children)
+    || !Array.isArray(response.data.related) || !Array.isArray(response.data.predecessors)
+    || !Array.isArray(response.data.successors) || !Array.isArray(response.data.duplicates)) return null;
   const item = itemFromValue(response.data.item);
   const parentValue = response.data.parent ?? null;
   const parent = parentValue === null ? null : itemFromValue(parentValue);
   if (item === null || (parentValue !== null && parent === null)) return null;
-  const subtasks: DetailItem[] = [];
-  for (const candidate of response.data.subtasks ?? []) {
-    const subtask = itemFromValue(candidate);
-    if (subtask === null) return null;
-    subtasks.push(subtask);
+  const children: DetailItem[] = [];
+  for (const candidate of response.data.children) {
+    const child = itemFromValue(candidate);
+    if (child === null) return null;
+    children.push(child);
   }
+  const parseRelationships = (value: unknown[]): DetailRelationship[] | null => {
+    const result: DetailRelationship[] = [];
+    for (const candidate of value) {
+      const relationship = relationshipFromValue(candidate);
+      if (relationship === null) return null;
+      result.push(relationship);
+    }
+    return result;
+  };
+  const related = parseRelationships(response.data.related);
+  const predecessors = parseRelationships(response.data.predecessors);
+  const successors = parseRelationships(response.data.successors);
+  const duplicates = parseRelationships(response.data.duplicates);
+  const duplicateOfValue = response.data.duplicateOf ?? null;
+  const duplicateOf = duplicateOfValue === null ? null : relationshipFromValue(duplicateOfValue);
+  if (related === null || predecessors === null || successors === null || duplicates === null
+    || (duplicateOfValue !== null && duplicateOf === null)) return null;
   const comments: DetailComment[] = [];
   for (const candidate of response.data.comments) {
     const comment = commentFromValue(candidate);
@@ -119,7 +157,7 @@ export function detailFromResponse(response: unknown): DetailPayload | null {
     if (entry === null) return null;
     history.push(entry);
   }
-  return { item, parent, subtasks, comments, history };
+  return { item, parent, children, related, predecessors, successors, duplicates, duplicateOf, comments, history };
 }
 
 export function participantsFromResponse(response: unknown): readonly DetailParticipant[] | null {

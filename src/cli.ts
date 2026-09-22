@@ -113,7 +113,7 @@ function runInit(ctx: CommandContext): number {
 }
 
 function runAdd(ctx: CommandContext, rest: readonly string[]): number {
-  const args = parseArgs(rest, new Set(["body", "priority", "labels", "assignee"]));
+  const args = parseArgs(rest, new Set(["body", "priority", "labels", "assignee", "type", "parent"]));
   const title = args.positionals[0];
   if (title === undefined || title.length === 0) fail("a title is required: workboard add <title>");
 
@@ -126,6 +126,8 @@ function runAdd(ctx: CommandContext, rest: readonly string[]): number {
       title,
       ...(value(args, "body") !== undefined ? { body: value(args, "body") } : {}),
       ...(value(args, "priority") !== undefined ? { priority: Number(value(args, "priority")) } : {}),
+      ...(value(args, "type") !== undefined ? { type: value(args, "type") } : {}),
+      ...(value(args, "parent") !== undefined ? { parentId: Number(value(args, "parent")) } : {}),
       ...(value(args, "assignee") !== undefined ? { assigneeId: resolveAssigneeArg(service, actor, value(args, "assignee")) } : {}),
       ...(labelsRaw !== undefined ? { labels: ensureLabels(service, actor, labelsRaw) } : {}),
     });
@@ -166,13 +168,14 @@ function resolveAssigneeArg(service: WorkboardService, actor: Actor, raw: string
 }
 
 function runList(ctx: CommandContext, rest: readonly string[]): number {
-  const args = parseArgs(rest, new Set(["status", "assignee", "label", "q", "limit", "cursor"]));
+  const args = parseArgs(rest, new Set(["status", "type", "assignee", "label", "q", "limit", "cursor"]));
   const db = openInitializedDb(ctx);
   try {
     const service = new WorkboardService(db);
     const actor = resolveActor(service, ctx.globalArgs);
     const raw: RawItemQuery = {
       ...(value(args, "status") !== undefined ? { status: value(args, "status") } : {}),
+      ...(value(args, "type") !== undefined ? { type: value(args, "type") } : {}),
       ...(value(args, "assignee") !== undefined ? { assignee: value(args, "assignee") } : {}),
       ...(value(args, "label") !== undefined ? { label: value(args, "label") } : {}),
       ...(value(args, "q") !== undefined ? { q: value(args, "q") } : {}),
@@ -186,8 +189,8 @@ function runList(ctx: CommandContext, rest: readonly string[]): number {
     } else {
       for (const item of result.items) {
         const assignee = item.assignee === null ? "" : ` @${item.assignee.name}`;
-        const labels = item.labels.length > 0 ? ` [${item.labels.join(", ")}]` : "";
-        console.log(`#${item.id} [${item.status}] (P${item.priority}) ${item.title}${assignee}${labels}`);
+        const labels = item.labels.length > 0 ? ` [${item.labels.map((label) => label.name).join(", ")}]` : "";
+        console.log(`#${item.id} [${item.type}] [${item.status}] (P${item.priority}) ${item.title}${assignee}${labels}`);
       }
       if (result.nextCursor !== null) {
         console.log(`— next page: --cursor ${result.nextCursor}`);
@@ -215,14 +218,23 @@ function runView(ctx: CommandContext, rest: readonly string[]): number {
       return 0;
     }
     const item = detail.item;
-    console.log(`#${item.id} [${item.status}] (P${item.priority}) ${item.title}`);
+    console.log(`#${item.id} [${item.type}] [${item.status}] (P${item.priority}) ${item.title}`);
     if (item.body.length > 0) console.log(item.body);
     const meta: string[] = [];
     if (item.assignee !== null) meta.push(`assignee: @${item.assignee.name}`);
-    if (item.labels.length > 0) meta.push(`labels: ${item.labels.join(", ")}`);
+    if (item.labels.length > 0) meta.push(`labels: ${item.labels.map((label) => label.name).join(", ")}`);
     meta.push(`created by #${item.createdBy}`);
     if (item.closedAt !== null) meta.push(`closed: ${item.closedAt}`);
     if (meta.length > 0) console.log(meta.join(" | "));
+    if (detail.parent !== null) console.log(`  parent: #${detail.parent.id} ${detail.parent.title}`);
+    for (const child of detail.children) console.log(`  child: #${child.id} ${child.title}`);
+    for (const relation of [
+      ...detail.related,
+      ...detail.predecessors,
+      ...detail.successors,
+      ...detail.duplicates,
+      ...(detail.duplicateOf === null ? [] : [detail.duplicateOf]),
+    ]) console.log(`  ${relation.name}: #${relation.item.id} ${relation.item.title} (relationship #${relation.id})`);
     for (const comment of detail.comments) {
       console.log(`  > @${comment.author.name}: ${comment.body}`);
     }
@@ -240,7 +252,7 @@ function runView(ctx: CommandContext, rest: readonly string[]): number {
 }
 
 function runUpdate(ctx: CommandContext, rest: readonly string[]): number {
-  const args = parseArgs(rest, new Set(["title", "body", "status", "priority", "assignee", "labels"]));
+  const args = parseArgs(rest, new Set(["title", "body", "status", "priority", "assignee", "labels", "type", "parent"]));
   const id = Number(args.positionals[0]);
   if (!Number.isInteger(id) || id <= 0) fail("an item id is required: workboard update <id> [fields]");
   const patch: Record<string, unknown> = {};
@@ -248,6 +260,9 @@ function runUpdate(ctx: CommandContext, rest: readonly string[]): number {
   if (value(args, "body") !== undefined) patch.body = value(args, "body");
   if (value(args, "status") !== undefined) patch.status = value(args, "status");
   if (value(args, "priority") !== undefined) patch.priority = Number(value(args, "priority"));
+  if (value(args, "type") !== undefined) patch.type = value(args, "type");
+  if (value(args, "parent") !== undefined) patch.parentId = Number(value(args, "parent"));
+  if (flag(args, "detach")) patch.parentId = null;
   if (flag(args, "unassign")) patch.assigneeId = null;
   else if (value(args, "assignee") !== undefined) {
     const db = openInitializedDb(ctx);
@@ -300,6 +315,84 @@ function runComment(ctx: CommandContext, rest: readonly string[]): number {
       const mentioned = result.mentionedParticipants.map((participant) => `@${participant.name}`).join(", ");
       console.log(`Comment added to item #${id}${mentioned.length > 0 ? ` (mentioned: ${mentioned})` : ""}`);
     }
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
+function runRelationship(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set());
+  const action = args.positionals[0];
+  const itemId = Number(args.positionals[1]);
+  if (!Number.isSafeInteger(itemId) || itemId <= 0) fail("relationship requires an item id");
+  const db = openInitializedDb(ctx);
+  try {
+    const service = new WorkboardService(db);
+    const actor = resolveActor(service, ctx.globalArgs);
+    if (action === "add") {
+      const name = args.positionals[2];
+      const targetId = Number(args.positionals[3]);
+      if (name === undefined || !Number.isSafeInteger(targetId) || targetId <= 0) {
+        fail("usage: workboard relationship add <id> <name> <target-id>");
+      }
+      const result = service.createRelationship(actor, itemId, { name, itemId: targetId });
+      if (flag(ctx.globalArgs, "json")) printJson(result);
+      else console.log(`Added ${name} relationship from #${itemId} to #${targetId}`);
+      return 0;
+    }
+    if (action === "remove") {
+      const relationshipId = Number(args.positionals[2]);
+      if (!Number.isSafeInteger(relationshipId) || relationshipId <= 0) {
+        fail("usage: workboard relationship remove <id> <relationship-id>");
+      }
+      const result = service.deleteRelationship(actor, itemId, { relationshipId });
+      if (flag(ctx.globalArgs, "json")) printJson(result);
+      else console.log(`Removed relationship #${relationshipId} from item #${itemId}`);
+      return 0;
+    }
+    if (action === "list") {
+      const detail = service.getItem(actor, itemId);
+      const relationships = {
+        parent: detail.parent,
+        children: detail.children,
+        related: detail.related,
+        predecessors: detail.predecessors,
+        successors: detail.successors,
+        duplicates: detail.duplicates,
+        duplicateOf: detail.duplicateOf,
+      };
+      if (flag(ctx.globalArgs, "json")) printJson(relationships);
+      else for (const [name, value] of Object.entries(relationships)) {
+        const count = value === null ? 0 : Array.isArray(value) ? value.length : 1;
+        console.log(`${name}: ${count}`);
+      }
+      return 0;
+    }
+    fail("relationship action must be add, remove, or list");
+  } finally {
+    db.close();
+  }
+}
+
+function runReorder(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set(["parent", "before"]));
+  const itemId = Number(args.positionals[0]);
+  if (!Number.isSafeInteger(itemId) || itemId <= 0) fail("reorder requires an item id");
+  const parentRaw = value(args, "parent");
+  if (parentRaw === undefined) fail("--parent <id|root> is required");
+  const parentId = parentRaw === "root" ? null : Number(parentRaw);
+  if (parentId !== null && (!Number.isSafeInteger(parentId) || parentId <= 0)) fail("invalid parent id");
+  const beforeRaw = value(args, "before");
+  const beforeId = beforeRaw === undefined || beforeRaw === "end" ? null : Number(beforeRaw);
+  if (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId <= 0)) fail("invalid before id");
+  const db = openInitializedDb(ctx);
+  try {
+    const service = new WorkboardService(db);
+    const actor = resolveActor(service, ctx.globalArgs);
+    const result = service.reorderItem(actor, itemId, { parentId, beforeId });
+    if (flag(ctx.globalArgs, "json")) printJson(result);
+    else console.log(`Moved item #${itemId} to position ${result.backlogPosition}`);
     return 0;
   } finally {
     db.close();
@@ -552,6 +645,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         return runUpdate(ctx, commandArgs);
       case "comment":
         return runComment(ctx, commandArgs);
+      case "relationship":
+        return runRelationship(ctx, commandArgs);
+      case "reorder":
+        return runReorder(ctx, commandArgs);
       case "mcp":
         return await runMcpCommand(ctx);
       case "serve":
@@ -599,11 +696,13 @@ function printUsage(): void {
       "",
       "Commands:",
       "  init                        Create the data directory and database",
-      "  add <title> [options]       Create a work item (--body --priority --labels --assignee)",
-      "  list [filters]              List items (--status --assignee --label --q --limit --cursor)",
-      "  view <id>                   Show one item with comments and history",
-      "  update <id> [fields]        Patch fields (--title --body --status --priority --assignee --unassign --labels)",
+      "  add <title> [options]       Create an item (--type --parent --body --priority --labels --assignee)",
+      "  list [filters]              List items (--type --status --assignee --label --q --limit --cursor)",
+      "  view <id>                   Show one item with relationships, comments, and history",
+      "  update <id> [fields]        Patch fields (--type --parent --detach and existing fields)",
       "  comment <id> <text>         Comment on an item (@name mentions notify)",
+      "  relationship <action> ...  Add, remove, or list item relationships",
+      "  reorder <id> [options]      Move item (--parent <id|root> --before <id|end>)",
       "  serve [--host] [--port]     Run the HTTP server (REST + MCP)",
       "  participant add             Add a participant (--name <name> --kind human|agent); no args lists",
       "  token create                Issue an API token (--participant <name> --name <label>)",

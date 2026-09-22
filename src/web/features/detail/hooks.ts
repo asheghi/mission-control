@@ -60,7 +60,9 @@ interface DetailApi {
   listParticipants: () => Promise<ApiResponse>;
   listLabels: () => Promise<ApiResponse>;
   updateItem: (id: number, patch: Record<string, unknown>) => Promise<unknown>;
-  createItem: (input: { title: string; parentId: number }) => Promise<unknown>;
+  createItem: (input: { title: string; parentId: number; type?: "task" }) => Promise<unknown>;
+  addRelationship: (id: number, input: { name: string; itemId: number }) => Promise<unknown>;
+  removeRelationship: (id: number, relationshipId: number) => Promise<unknown>;
   createLabel: (input: { name: string; color: string }) => Promise<unknown>;
   addComment: (id: number, body: string) => Promise<unknown>;
   deleteItem: (id: number) => Promise<unknown>;
@@ -68,13 +70,14 @@ interface DetailApi {
 const api = apiModule as DetailApi;
 
 /** The three item fields the detail view mutates one at a time. */
-type FieldName = "status" | "priority" | "assigneeId";
+type FieldName = "status" | "type" | "priority" | "assigneeId";
 
 /** The item value a field's intent maps onto (`assigneeId` → `assignee`). */
-type FieldValue = DetailItem["status"] | DetailItem["priority"] | number | null;
+type FieldValue = DetailItem["status"] | DetailItem["type"] | DetailItem["priority"] | number | null;
 
 interface FieldPatch {
   readonly status?: DetailItem["status"];
+  readonly type?: DetailItem["type"];
   readonly priority?: DetailItem["priority"];
   readonly assigneeId?: number | null;
 }
@@ -85,7 +88,7 @@ interface AcceptedItemPatch extends FieldPatch {
   readonly labels?: readonly DetailLabel[];
 }
 
-const FIELD_NAMES: readonly FieldName[] = ["status", "priority", "assigneeId"];
+const FIELD_NAMES: readonly FieldName[] = ["status", "type", "priority", "assigneeId"];
 
 function validItemId(value: unknown): number | null {
   const id = typeof value === "number" ? value : Number(value);
@@ -104,6 +107,7 @@ function readBodyTab(id: number | null): BodyTab {
 /** Read one mutated field off a patch, or undefined when that field is absent. */
 function patchValue(patch: FieldPatch, field: FieldName): FieldValue | undefined {
   if (field === "status") return patch.status;
+  if (field === "type") return patch.type;
   if (field === "priority") return patch.priority;
   return patch.assigneeId;
 }
@@ -112,6 +116,7 @@ function patchValue(patch: FieldPatch, field: FieldName): FieldValue | undefined
 function withFields(item: DetailItem, patch: FieldPatch, participants: readonly DetailParticipant[]): DetailItem {
   let next = item;
   if (patch.status !== undefined) next = { ...next, status: patch.status };
+  if (patch.type !== undefined) next = { ...next, type: patch.type };
   if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
   if (patch.assigneeId !== undefined) {
     const assignee = patch.assigneeId === null
@@ -134,6 +139,7 @@ function reapplyIntent(
 ): DetailItem {
   if (intent === undefined) return item;
   if (field === "status") return { ...item, status: intent as DetailItem["status"] };
+  if (field === "type") return { ...item, type: intent as DetailItem["type"] };
   if (field === "priority") return { ...item, priority: intent as DetailItem["priority"] };
   return withFields(item, { assigneeId: intent as number | null }, participants);
 }
@@ -209,7 +215,12 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
   const [comments, setComments] = useState<DetailState["comments"]>([]);
   const [history, setHistory] = useState<DetailState["history"]>([]);
   const [parent, setParentState] = useState<DetailItem | null>(null);
-  const [subtasks, setSubtasks] = useState<readonly DetailItem[]>([]);
+  const [children, setChildren] = useState<readonly DetailItem[]>([]);
+  const [related, setRelated] = useState<DetailState["related"]>([]);
+  const [predecessors, setPredecessors] = useState<DetailState["predecessors"]>([]);
+  const [successors, setSuccessors] = useState<DetailState["successors"]>([]);
+  const [duplicates, setDuplicates] = useState<DetailState["duplicates"]>([]);
+  const [duplicateOf, setDuplicateOf] = useState<DetailState["duplicateOf"]>(null);
   const [participants, setParticipants] = useState<readonly DetailParticipant[]>([]);
   const [labels, setLabels] = useState<readonly DetailLabel[]>([]);
   const [selectedLabelNames, setSelectedLabelNames] = useState<readonly string[]>([]);
@@ -326,7 +337,12 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     setComments(detail.comments);
     setHistory(detail.history);
     setParentState(detail.parent);
-    setSubtasks(detail.subtasks);
+    setChildren(detail.children);
+    setRelated(detail.related);
+    setPredecessors(detail.predecessors);
+    setSuccessors(detail.successors);
+    setDuplicates(detail.duplicates);
+    setDuplicateOf(detail.duplicateOf);
     if (!titleDirty && !titleFocusedRef.current) {
       titleDraftRef.current = detail.item.title;
       setTitleDraftState(detail.item.title);
@@ -684,9 +700,11 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
       const intent = patchValue(patch, field);
       const single: FieldPatch = field === "status"
         ? { status: intent as DetailItem["status"] }
-        : field === "priority"
-          ? { priority: intent as DetailItem["priority"] }
-          : { assigneeId: intent as number | null };
+        : field === "type"
+          ? { type: intent as DetailItem["type"] }
+          : field === "priority"
+            ? { priority: intent as DetailItem["priority"] }
+            : { assigneeId: intent as number | null };
       void queue.schedule(single)
         .catch(() => undefined)
         .finally(() => { if (mountedRef.current && !terminalRef.current) publishFieldsBusy(); });
@@ -927,7 +945,7 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     if (id === null || value === "" || !active() || relationshipsBusy) return false;
     setRelationshipsBusy(true);
     try {
-      await api.createItem({ title: value, parentId: id });
+      await api.createItem({ title: value, parentId: id, type: "task" });
       if (!active()) return true;
       markApplied("item");
       setNotice("Sub-task added.");
@@ -940,6 +958,34 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     } finally {
       if (active()) setRelationshipsBusy(false);
     }
+  }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
+
+  const addRelationship = useCallback((name: "related" | "predecessor" | "successor" | "duplicate" | "duplicate_of", itemId: number): void => {
+    if (id === null || !active() || relationshipsBusy) return;
+    setRelationshipsBusy(true);
+    void api.addRelationship(id, { name, itemId }).then(() => {
+      if (!active()) return;
+      markApplied("item");
+      setNotice("Relationship added.");
+      void refresh(true);
+    }).catch((caught: unknown) => {
+      if (!active() || failAuthentication(caught)) return;
+      setNotice(caught instanceof apiModule.ApiError ? caught.message : DETAIL_SAVE_ERROR);
+    }).finally(() => { if (active()) setRelationshipsBusy(false); });
+  }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
+
+  const removeRelationship = useCallback((relationshipId: number): void => {
+    if (id === null || !active() || relationshipsBusy) return;
+    setRelationshipsBusy(true);
+    void api.removeRelationship(id, relationshipId).then(() => {
+      if (!active()) return;
+      markApplied("item");
+      setNotice("Relationship removed.");
+      void refresh(true);
+    }).catch((caught: unknown) => {
+      if (!active() || failAuthentication(caught)) return;
+      setNotice(DETAIL_SAVE_ERROR);
+    }).finally(() => { if (active()) setRelationshipsBusy(false); });
   }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
 
   // --- delete ----------------------------------------------------------------
@@ -1048,7 +1094,8 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
   stopWritesRef.current = [stopWrites];
 
   return {
-    id, item, comments, history, parent, subtasks, participants, labels, loading, refreshing, notFound, error, notice, announcement,
+    id, item, comments, history, parent, children, related, predecessors, successors, duplicates, duplicateOf,
+    participants, labels, loading, refreshing, notFound, error, notice, announcement,
     titleDraft, titleStatus, bodyDraft, bodyStatus, bodyTab, commentDraft, commentBusy, mention,
     labelDraft, labelNotice, selectedLabelNames, labelsBusy, fieldsBusy, relationshipsBusy, deleting, expandedHistory,
     retry: () => void refresh(false),
@@ -1062,6 +1109,8 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     patchField,
     setParent,
     createSubtask,
+    addRelationship,
+    removeRelationship,
     setLabelDraft,
     addLabel,
     removeLabel,

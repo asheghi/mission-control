@@ -19,7 +19,7 @@ function toolText(result: unknown): any {
 }
 
 describe("stdio MCP server", () => {
-  test("exposes the six tools and persists attributed work", async () => {
+  test("exposes the nine tools and persists attributed work", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "wb-stdio-"));
     const transport = new StdioClientTransport({
       command: process.execPath,
@@ -31,11 +31,14 @@ describe("stdio MCP server", () => {
     try {
       const { tools } = await client.listTools();
       expect([...tools.map((tool) => tool.name)].sort()).toEqual([
+        "add_work_relationship",
         "comment",
         "create_work",
         "get_work",
         "list_work",
         "my_work",
+        "remove_work_relationship",
+        "reorder_work",
         "update_work",
       ]);
 

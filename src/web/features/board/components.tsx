@@ -1,6 +1,7 @@
 import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { WorkStatus } from "../../../domain/types";
+import { workItemTypeBadge } from "../../views";
 import { clampedStatusTarget, isWorkStatus, normalizeCommentCount, validateInternalDragId } from "./data";
 import { BOARD_COLUMN_LABELS, BOARD_STATUSES } from "./types";
 import type { BoardFocusTarget, BoardItem } from "./types";
@@ -34,6 +35,7 @@ export function WorkItemCard({ item, onMove, onDragStart, onDragEnd, dragging, m
   const assigneeLabel = item.assignee === null
     ? "Unassigned"
     : `Assigned to ${item.assignee.name}, ${item.assignee.kind}`;
+  const typeBadge = workItemTypeBadge(item.type);
   const metadataId = `board-item-${item.id}-metadata`;
 
   const onTitleKeyDown = (event: JSX.TargetedKeyboardEvent<HTMLAnchorElement>): void => {
@@ -59,6 +61,9 @@ export function WorkItemCard({ item, onMove, onDragStart, onDragEnd, dragging, m
       onDragEnd={onDragEnd}
     >
       <div class="board-card-top">
+        <span class={typeBadge.className} title={typeBadge.label}>
+          <span class="type-mark" aria-hidden="true">{typeBadge.mark}</span>{typeBadge.label}
+        </span>
         <span class={`chip ${priorityClass(item.priority)}`}>P{item.priority}</span>
         {item.labels.map((label) => <span class="chip label-chip" key={label.id}>{label.name}</span>)}
       </div>
@@ -71,7 +76,7 @@ export function WorkItemCard({ item, onMove, onDragStart, onDragEnd, dragging, m
       >
         {item.title}
       </a>
-      <span class="sr-only" id={metadataId}>{commentLabel}. {assigneeLabel}.</span>
+      <span class="sr-only" id={metadataId}>{typeBadge.label}. {commentLabel}. {assigneeLabel}.</span>
       <div class="board-card-bottom">
         <span class="board-card-refs">
           <span class="muted">#{item.id}</span>

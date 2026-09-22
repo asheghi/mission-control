@@ -1915,6 +1915,10 @@ describe("backlog table bundle", () => {
     // rather than merely painted.
     expect(js).toContain("aria-expanded");
     expect(js).toContain("aria-level");
+    // The toggle names the region it controls, so the disclosure is a real
+    // relationship rather than a state with no destination.
+    expect(js).toContain("aria-controls");
+    expect(js).toContain("backlog-children-");
     // The toggle's accessible name is built from these two literals, so the
     // direction of the disclosure is announced, not just its state.
     expect(js).toContain("Collapse");
@@ -1924,6 +1928,35 @@ describe("backlog table bundle", () => {
     // The indent spacers and the count badge are decorative: the hierarchy is
     // stated by the row's aria-level and the toggle's label instead.
     expect(js).toContain("aria-hidden");
+  });
+
+  // Three defects a design review found in the rendered view, each of which a
+  // unit test on the data layer could not see. These assert the *served* bundle
+  // because every one of them was a bundling or markup mistake, not a logic one.
+  test("no escape sequence reaches the DOM as literal text", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+    const css = STATIC_ASSETS["/assets/styles.css"]!.body;
+
+    // A `\u2026` written inside JSX text or a JSX attribute is not a JS string
+    // escape, so it shipped as the five visible characters `u2026`. The real
+    // ellipsis must be present, and the escaped spelling must appear nowhere.
+    expect(js).toContain("Add an upcoming work item…");
+    expect(js).toContain("Loading backlog…");
+    for (const [name, body] of [["app.js", js], ["styles.css", css]] as const) {
+      expect(body.includes("u2026"), `${name} ships a literal \\u2026`).toBe(false);
+    }
+  });
+
+  test("an unavailable move control stays focusable and states why", () => {
+    const js = STATIC_ASSETS["/assets/app.js"]!.body;
+
+    // A structural "you cannot move this way" is `aria-disabled`, not
+    // `disabled`: the control keeps its place in the tab order so a keyboard
+    // user still reaches it and hears the reason. `disabled` remains reserved
+    // for the transient in-flight state.
+    expect(js).toContain("aria-disabled");
+    expect(js).toContain("no previous sibling");
+    expect(js).toContain("already at the top level");
   });
 
   test("the backlog view is the shell's default view", () => {

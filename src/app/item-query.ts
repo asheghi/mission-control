@@ -7,6 +7,7 @@ import type { WorkboardService } from "./workboard";
 
 export interface RawItemQuery {
   readonly status?: string | undefined;
+  readonly type?: string | undefined;
   readonly assignee?: string | undefined;
   readonly label?: string | undefined;
   readonly q?: string | undefined;
@@ -25,6 +26,7 @@ export function resolveItemQuery(service: WorkboardService, actor: Actor, raw: R
   let emptyResult = false;
 
   if (raw.status !== undefined) filter.status = raw.status;
+  if (raw.type !== undefined) filter.type = raw.type;
 
   const assignee = raw.assignee;
   if (assignee !== undefined) {

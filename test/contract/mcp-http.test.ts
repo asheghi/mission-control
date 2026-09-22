@@ -93,10 +93,10 @@ function toolText(result: unknown): { parsed: any; isError: boolean } {
   return { parsed: JSON.parse(typed.content[0]?.text ?? "null"), isError: typed.isError === true };
 }
 
-const EXPECTED_TOOLS = ["comment", "create_work", "get_work", "list_work", "my_work", "update_work"];
+const EXPECTED_TOOLS = ["add_work_relationship", "comment", "create_work", "get_work", "list_work", "my_work", "remove_work_relationship", "reorder_work", "update_work"];
 
 describe("stateless MCP HTTP endpoint", () => {
-  test("initializes with no session id and exposes the six tools", async () => {
+  test("initializes with no session id and exposes the nine tools", async () => {
     await withMcpServer(async ({ url, aliceToken }) => {
       const { client, transport } = await connectClient(url, aliceToken);
       try {

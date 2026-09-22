@@ -489,7 +489,7 @@ export function tabIndexForKey(key, currentIndex, tabCount) {
 
 // --- List filters: URL/hash-backed and restorable ---------------------------
 
-export const FILTER_KEYS = ["status", "assignee", "label", "q"];
+export const FILTER_KEYS = ["status", "type", "assignee", "label", "q"];
 
 const FILTERS_STORAGE_KEY = "workboard.filters";
 const HASH_PREFIX = "#/list";
@@ -498,7 +498,7 @@ const MAX_QUERY_LENGTH = 256;
 
 /** The empty filter set (also the reset target). */
 export function emptyFilters() {
-  return { status: "", assignee: "", label: "", q: "" };
+  return { status: "", type: "", assignee: "", label: "", q: "" };
 }
 
 /** `#/list?status=doing&q=parse` for the non-empty filters. */

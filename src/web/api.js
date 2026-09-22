@@ -64,10 +64,14 @@ function withQuery(path, params) {
 
 export const health = () => api("/api/health");
 export const listItems = (params) => api(withQuery("/api/items", params));
+export const listBacklog = () => api("/api/backlog");
 export const getItem = (id) => api(`/api/items/${id}`);
 export const createItem = (input) => api("/api/items", { method: "POST", body: input });
 export const updateItem = (id, patch) => api(`/api/items/${id}`, { method: "PATCH", body: patch });
 export const deleteItem = (id) => api(`/api/items/${id}`, { method: "DELETE" });
+export const addRelationship = (id, input) => api(`/api/items/${id}/relationships`, { method: "POST", body: input });
+export const removeRelationship = (id, relationshipId) => api(`/api/items/${id}/relationships/${relationshipId}`, { method: "DELETE" });
+export const reorderItem = (id, input) => api(`/api/items/${id}/reorder`, { method: "POST", body: input });
 export const addComment = (id, body) => api(`/api/items/${id}/comments`, { method: "POST", body: { body } });
 export const myWork = (params) => api(withQuery("/api/me/work", params));
 export const listParticipants = () => api("/api/participants");

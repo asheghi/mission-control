@@ -1,4 +1,5 @@
-import type { Priority, WorkStatus } from "../../../domain/types";
+import { WORK_ITEM_TYPES } from "../../../domain/types";
+import type { Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 import { LIST_STATUSES } from "./types";
 import type { ListAssignee, ListItem, ListLabel, ListParticipant } from "./types";
 
@@ -43,6 +44,11 @@ function itemFromValue(value: unknown): ListItem | null {
     || !isPositiveId(value.id)
     || typeof value.title !== "string"
     || !isWorkStatus(value.status)
+    || typeof value.type !== "string"
+    || !(WORK_ITEM_TYPES as readonly string[]).includes(value.type)
+    || typeof value.backlogPosition !== "number"
+    || !Number.isSafeInteger(value.backlogPosition)
+    || value.backlogPosition < 0
     || !Array.isArray(value.labels)) return null;
   const priority = priorityFromValue(value.priority);
   const assignee = assigneeFromValue(value.assignee);
@@ -53,7 +59,16 @@ function itemFromValue(value: unknown): ListItem | null {
     if (label === null) return null;
     labels.push(label);
   }
-  return { id: value.id, title: value.title, status: value.status, priority, assignee, labels };
+  return {
+    id: value.id,
+    title: value.title,
+    status: value.status,
+    type: value.type as WorkItemType,
+    backlogPosition: value.backlogPosition,
+    priority,
+    assignee,
+    labels,
+  };
 }
 
 export interface ListPage {

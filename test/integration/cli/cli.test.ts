@@ -64,7 +64,7 @@ describe("CLI", () => {
       expect(listJson.nextCursor).toBeNull();
 
       const humanList = await runInDir(dataDir, ["list"]);
-      expect(humanList.stdout).toContain(`#${itemId} [todo] (P1) Write docs`);
+      expect(humanList.stdout).toContain(`#${itemId} [user_story] [todo] (P1) Write docs`);
       expect(humanList.stdout).toContain("(1 item(s))");
 
       const updated = await runInDir(dataDir, ["--json", "update", String(itemId), "--status", "doing", "--labels", "docs"]);
@@ -85,7 +85,7 @@ describe("CLI", () => {
       expect(viewJson.history.length).toBeGreaterThanOrEqual(2);
 
       const humanView = await runInDir(dataDir, ["view", String(itemId)]);
-      expect(humanView.stdout).toContain(`#${itemId} [doing] (P1) Write docs`);
+      expect(humanView.stdout).toContain(`#${itemId} [user_story] [doing] (P1) Write docs`);
       expect(humanView.stdout).toContain("@local: making progress");
     } finally {
       rmSync(dataDir, { recursive: true, force: true });

@@ -180,16 +180,87 @@ describe("WorkboardService items", () => {
 
       expect(child.item.parentId).toBe(parent.item.id);
       expect(child.parent?.id).toBe(parent.item.id);
-      expect(service.getItem(alice, parent.item.id).subtasks.map((item) => item.id)).toEqual([child.item.id]);
+      expect(service.getItem(alice, parent.item.id).children.map((item) => item.id)).toEqual([child.item.id]);
       expect(() => service.updateItem(alice, parent.item.id, { parentId: child.item.id })).toThrow(ValidationError);
       expect(() => service.updateItem(alice, child.item.id, { parentId: child.item.id })).toThrow(ValidationError);
       expect(() => service.createItem(alice, { title: "Orphan", parentId: 999 })).toThrow(NotFoundError);
 
-      const detached = service.updateItem(alice, child.item.id, { parentId: null });
+      expect(() => service.updateItem(alice, child.item.id, { parentId: null })).toThrow(ValidationError);
+      const detached = service.updateItem(alice, child.item.id, { type: "user_story", parentId: null });
+      expect(detached.item.type).toBe("user_story");
       expect(detached.item.parentId).toBeNull();
       expect(detached.parent).toBeNull();
       expect(detached.history.some((entry) => entry.field === "parent")).toBe(true);
-      expect(service.getItem(alice, parent.item.id).subtasks).toEqual([]);
+      expect(service.getItem(alice, parent.item.id).children).toEqual([]);
+    });
+  });
+
+  test("enforces work-item types and Task parent rules", () => {
+    withFixture(({ service, alice }) => {
+      const feature = service.createItem(alice, { title: "Feature", type: "feature" });
+      const story = service.createItem(alice, { title: "Story", type: "user_story", parentId: feature.item.id });
+      const bug = service.createItem(alice, { title: "Bug", type: "bug" });
+      const task = service.createItem(alice, { title: "Task", type: "task", parentId: story.item.id });
+
+      expect([feature.item.type, story.item.type, bug.item.type, task.item.type]).toEqual([
+        "feature", "user_story", "bug", "task",
+      ]);
+      expect(() => service.createItem(alice, { title: "Orphan task", type: "task" })).toThrow(ValidationError);
+      expect(() => service.updateItem(alice, bug.item.id, { type: "task" })).toThrow(ValidationError);
+      const converted = service.updateItem(alice, bug.item.id, { type: "task", parentId: story.item.id });
+      expect(converted.item.type).toBe("task");
+      expect(converted.item.parentId).toBe(story.item.id);
+      expect(service.listItems(alice, { type: "task" }).items.map((item) => item.id).sort()).toEqual([
+        task.item.id, bug.item.id,
+      ].sort());
+    });
+  });
+
+  test("creates, reads, and removes core relationship types", () => {
+    withFixture(({ service, alice }) => {
+      const a = service.createItem(alice, { title: "A" });
+      const b = service.createItem(alice, { title: "B" });
+      const c = service.createItem(alice, { title: "C" });
+
+      service.createRelationship(alice, a.item.id, { name: "related", itemId: b.item.id });
+      service.createRelationship(alice, a.item.id, { name: "successor", itemId: c.item.id });
+      service.createRelationship(alice, b.item.id, { name: "duplicate_of", itemId: c.item.id });
+
+      const aDetail = service.getItem(alice, a.item.id);
+      expect(aDetail.related.map((entry) => entry.item.id)).toEqual([b.item.id]);
+      expect(aDetail.successors.map((entry) => entry.item.id)).toEqual([c.item.id]);
+      expect(service.getItem(alice, c.item.id).predecessors.map((entry) => entry.item.id)).toEqual([a.item.id]);
+      expect(service.getItem(alice, b.item.id).duplicateOf?.item.id).toBe(c.item.id);
+      expect(service.getItem(alice, c.item.id).duplicates.map((entry) => entry.item.id)).toEqual([b.item.id]);
+
+      const relationId = aDetail.related[0]!.id;
+      const afterDelete = service.deleteRelationship(alice, a.item.id, { relationshipId: relationId });
+      expect(afterDelete.related).toEqual([]);
+      expect(service.getItem(alice, b.item.id).related).toEqual([]);
+      expect(afterDelete.history.some((entry) => entry.field === "relationship.removed")).toBe(true);
+      expect(() => service.createRelationship(alice, c.item.id, { name: "successor", itemId: a.item.id })).toThrow(ConflictError);
+    });
+  });
+
+  test("lists and reorders more than 100 unfinished backlog items", () => {
+    withFixture(({ service, alice }) => {
+      const ids: number[] = [];
+      for (let index = 0; index < 105; index += 1) {
+        ids.push(service.createItem(alice, { title: `Item ${index}` }).item.id);
+      }
+      const moved = service.reorderItem(alice, ids[104]!, { parentId: null, beforeId: ids[0] });
+      expect(moved.backlogPosition).toBe(0);
+      const backlog = service.listBacklog(alice);
+      expect(backlog).toHaveLength(105);
+      expect(backlog[0]?.id).toBe(ids[104]!);
+    });
+  });
+
+  test("deleteItem rejects parents with children", () => {
+    withFixture(({ service, alice }) => {
+      const parent = service.createItem(alice, { title: "Parent" });
+      service.createItem(alice, { title: "Child", parentId: parent.item.id });
+      expect(() => service.deleteItem(alice, parent.item.id)).toThrow(ConflictError);
     });
   });
 

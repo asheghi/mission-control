@@ -1,4 +1,4 @@
-import type { ParticipantKind, Priority, WorkStatus } from "../../../domain/types";
+import type { ParticipantKind, Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 
 export const BOARD_STATUSES = ["todo", "doing", "blocked", "done"] as const satisfies readonly WorkStatus[];
 
@@ -25,6 +25,8 @@ export interface BoardItem {
   readonly id: number;
   readonly title: string;
   readonly status: WorkStatus;
+  readonly type: WorkItemType;
+  readonly backlogPosition: number;
   readonly priority: Priority;
   readonly labels: readonly BoardLabel[];
   readonly commentCount: number;

@@ -15,6 +15,8 @@ import {
   normalizeLabelName,
   normalizeLabelSet,
   normalizeLinkUrl,
+  parseItemId,
+  taskTypeAllowed,
   tokenizeInline,
   truncateLine,
 } from "../../../src/web/features/detail/helpers";
@@ -189,5 +191,55 @@ describe("mention trigger and insertion", () => {
     const trigger = mentionTrigger("hi @we", 999);
     expect(trigger).toEqual({ start: 3, query: "we" });
     expect(insertMention("hi @we", 999, { start: 3, query: "we" }, "x").value).toBe("hi @x ");
+  });
+});
+
+// The id controls are text inputs with `inputMode="numeric"`, not
+// `type="number"`, so the value is whatever the user typed and has to be
+// validated here. A bad id that reached the API would be a 400 and a generic
+// "could not be saved" message that tells the user nothing about the field.
+describe("relationship item-id validation", () => {
+  test("accepts a plain positive integer, with surrounding space trimmed", () => {
+    expect(parseItemId("42")).toBe(42);
+    expect(parseItemId("  7 ")).toBe(7);
+    expect(parseItemId("1")).toBe(1);
+  });
+
+  test("rejects zero, negatives, and non-numeric text", () => {
+    // The API has no id 0, so a `0` here is a mistyped field, not an item.
+    expect(parseItemId("0")).toBeNull();
+    expect(parseItemId("-1")).toBeNull();
+    expect(parseItemId("abc")).toBeNull();
+    expect(parseItemId("12abc")).toBeNull();
+    expect(parseItemId("4 2")).toBeNull();
+    expect(parseItemId("")).toBeNull();
+    expect(parseItemId("   ")).toBeNull();
+  });
+
+  test("rejects the numeric forms Number() would quietly accept", () => {
+    // `Number` accepts all of these; a bare `Number.isSafeInteger` check would
+    // therefore send `1e3` and `0x10` to the server as real ids.
+    expect(parseItemId("1e3")).toBeNull();
+    expect(parseItemId("0x10")).toBeNull();
+    expect(parseItemId("1.0")).toBeNull();
+    expect(parseItemId("+5")).toBeNull();
+    expect(parseItemId("Infinity")).toBeNull();
+    expect(parseItemId("NaN")).toBeNull();
+    // Leading zeros are not how an id is written, and `Number("007")` is 7.
+    expect(parseItemId("007")).toBeNull();
+  });
+
+  test("rejects an id past the safe-integer range", () => {
+    expect(parseItemId("9007199254740993")).toBeNull();
+    // The largest safe integer is still accepted.
+    expect(parseItemId(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  test("taskTypeAllowed mirrors the server's Task-needs-a-parent rule", () => {
+    // The server rejects a Task with no parent, so a top-level item must not
+    // offer the option; a child may.
+    expect(taskTypeAllowed(null)).toBe(false);
+    expect(taskTypeAllowed(1)).toBe(true);
+    expect(taskTypeAllowed(0)).toBe(true);
   });
 });

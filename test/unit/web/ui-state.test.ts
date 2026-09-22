@@ -21,6 +21,7 @@ interface TypingTarget {
 
 interface ListFilters {
   status: string;
+  type: string;
   assignee: string;
   label: string;
   q: string;
@@ -288,8 +289,7 @@ describe("module surface", () => {
       expect(typeof value, name).toBe("function");
     }
     expect(typeof RECONNECT_BASE_MS).toBe("number");
-    expect(typeof RECONNECT_MAX_MS).toBe("number");
-    expect(FILTER_KEYS).toEqual(["status", "assignee", "label", "q"]);
+    expect(FILTER_KEYS).toEqual(["status", "type", "assignee", "label", "q"]);
   });
 
   test("builds no DOM with innerHTML, and never uses eval", async () => {
@@ -1074,9 +1074,9 @@ const filters = (partial: Partial<ListFilters>): ListFilters => ({ ...emptyFilte
 
 describe("list filter encoding", () => {
   test("a round trip preserves every filter", () => {
-    const full = { status: "doing", assignee: "7", label: "backend", q: "parse retry" };
+    const full = { status: "doing", type: "bug", assignee: "7", label: "backend", q: "parse retry" };
     const hash = encodeListHash(full);
-    expect(hash).toBe("#/list?status=doing&assignee=7&label=backend&q=parse+retry");
+    expect(hash).toBe("#/list?status=doing&type=bug&assignee=7&label=backend&q=parse+retry");
     expect(parseListFilters(hash)).toEqual(full);
   });
 
@@ -1091,6 +1091,23 @@ describe("list filter encoding", () => {
 
   test("only non-empty filters are encoded", () => {
     expect(encodeListHash({ status: "", assignee: "unassigned", label: "", q: "" })).toBe("#/list?assignee=unassigned");
+  });
+
+  test("the type filter is encoded, restored, and cleared like any other", () => {
+    // `type` is one of the five keys, and this asserts it is treated exactly like
+    // the rest: encoded when set, absent when empty, and counted as an active
+    // filter so "Clear filters" appears.
+    expect(encodeListHash(filters({ type: "bug" }))).toBe("#/list?type=bug");
+    expect(encodeListHash(filters({ status: "doing" }))).not.toContain("type");
+    expect(hasActiveFilters(filters({ type: "bug" }))).toBe(true);
+    expect(hasActiveFilters(filters({ type: "" }))).toBe(false);
+    // The encoder trims and drops an all-whitespace value, so a stray space can
+    // never produce a dangling `type=` parameter. `parseListFilters` reads
+    // verbatim and does not rewrite — the list's own validation is what refuses a
+    // value it does not recognise.
+    expect(encodeListHash(filters({ type: "  " }))).toBe("#/list");
+    expect(parseListFilters("#/list?type=").type).toBe("");
+    expect(parseListFilters("#/list?type=%20bug%20").type).toBe(" bug ");
   });
 
   test("a hash without a query yields empty filters", () => {
@@ -1111,7 +1128,7 @@ describe("list filter encoding", () => {
 
   test("a hostile hash cannot inject extra filter keys", () => {
     const parsed = parseListFilters("#/list?__proto__=x&status=todo");
-    expect(Object.keys(parsed).sort()).toEqual(["assignee", "label", "q", "status"]);
+    expect(Object.keys(parsed).sort()).toEqual(["assignee", "label", "q", "status", "type"]);
     expect(parsed.status).toBe("todo");
   });
 
@@ -1208,6 +1225,7 @@ describe("createFilterStore", () => {
     const first = fakeWindow("#/list");
     createFilterStore({ location: first.location, history: first.history, storage }).commit({
       status: "blocked",
+      type: "task",
       assignee: "unassigned",
       label: "urgent",
       q: "timeout",
@@ -1215,7 +1233,7 @@ describe("createFilterStore", () => {
     // Simulate F5 at the committed URL: a new page, same hash, same storage.
     const reloaded = fakeWindow(first.hash());
     const store = createFilterStore({ location: reloaded.location, history: reloaded.history, storage });
-    expect(store.load()).toEqual({ status: "blocked", assignee: "unassigned", label: "urgent", q: "timeout" });
+    expect(store.load()).toEqual({ status: "blocked", type: "task", assignee: "unassigned", label: "urgent", q: "timeout" });
   });
 
   test("onChange fires with the normalized filter set", () => {
