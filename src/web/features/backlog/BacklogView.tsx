@@ -408,7 +408,7 @@ export function BacklogView(props: BacklogViewProps) {
             disabled={backlog.adding}
             onInput={(event) => setDraft(event.currentTarget.value)}
           />
-          <button class="primary" type="submit" disabled={backlog.adding || draft.trim() === ""}>
+          <button class="primary" type="submit" aria-label="Add backlog item" disabled={backlog.adding || draft.trim() === ""}>
             {backlog.adding ? "Adding\u2026" : "Add item"}
           </button>
         </div>
