@@ -32,6 +32,16 @@ export function listParticipants(db: Database): ParticipantRow[] {
   return rows as ParticipantRow[];
 }
 
+// Renaming keeps id/kind/color/created_at; uniqueness is enforced by the
+// participants table's COLLATE NOCASE UNIQUE index, so conflicting names clash
+// case-insensitively.
+export function updateParticipantName(db: Database, id: number, newName: string): ParticipantRow | null {
+  const row = db
+    .query("UPDATE participants SET name = ? WHERE id = ? RETURNING id, name, kind, avatar_color, created_at")
+    .get(newName, id);
+  return (row as ParticipantRow | null) ?? null;
+}
+
 export function createParticipant(
   db: Database,
   input: { readonly name: string; readonly kind: ParticipantKind; readonly avatarColor: string; readonly createdAt: string },

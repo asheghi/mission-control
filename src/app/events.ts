@@ -13,6 +13,7 @@ export type WorkboardEventType =
   | "item.deleted"
   | "comment.created"
   | "participant.created"
+  | "participant.updated"
   | "label.created";
 
 export interface WorkboardEvent {

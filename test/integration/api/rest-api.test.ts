@@ -284,6 +284,46 @@ describe("REST API", () => {
     });
   });
 
+  test("PATCH /api/participants/:id renames with conflict and not-found mapping", async () => {
+    await withApi(async ({ url, aliceToken }) => {
+      const headers = { ...auth(aliceToken), "Content-Type": "application/json" };
+
+      const created = await probe(
+        fetch(`${url}/api/participants`, { method: "POST", headers, body: JSON.stringify({ name: "carol", kind: "human" }) }),
+      );
+      const carolId: number = created.body.data.id;
+
+      const renamed = await probe(
+        fetch(`${url}/api/participants/${carolId}`, { method: "PATCH", headers, body: JSON.stringify({ name: "playwright" }) }),
+      );
+      expect(renamed.status).toBe(200);
+      expect(renamed.body.data.name).toBe("playwright");
+      expect(renamed.body.data.kind).toBe("human");
+
+      const conflict = await probe(
+        fetch(`${url}/api/participants/${carolId}`, { method: "PATCH", headers, body: JSON.stringify({ name: "ALICE" }) }),
+      );
+      expect(conflict.status).toBe(409);
+      expect(conflict.body.error.code).toBe("CONFLICT");
+
+      const missing = await probe(
+        fetch(`${url}/api/participants/999`, { method: "PATCH", headers, body: JSON.stringify({ name: "ghost" }) }),
+      );
+      expect(missing.status).toBe(404);
+      expect(missing.body.error.code).toBe("NOT_FOUND");
+
+      const invalid = await probe(
+        fetch(`${url}/api/participants/${carolId}`, { method: "PATCH", headers, body: JSON.stringify({ name: "bad name" }) }),
+      );
+      expect(invalid.status).toBe(400);
+
+      // Renaming the bootstrap admin keeps resolving for token auth used by
+      // alice: list still works after the write.
+      const listed = await probe(fetch(`${url}/api/participants`, { headers: auth(aliceToken) }));
+      expect(listed.body.data.some((p: { name: string }) => p.name === "playwright")).toBe(true);
+    });
+  });
+
   test("list filters and cursor pagination over HTTP", async () => {
     await withApi(async ({ url, aliceToken, agent }) => {
       const headers = { ...auth(aliceToken), "Content-Type": "application/json" };

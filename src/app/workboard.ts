@@ -73,6 +73,7 @@ import {
   createParticipant as createParticipantRow,
   getParticipantById,
   listParticipants,
+  updateParticipantName as updateParticipantNameRow,
 } from "../db/repositories/participants";
 import type { ParticipantRow } from "../db/repositories/participants";
 import type { EventPublisher } from "./events";
@@ -132,6 +133,8 @@ export const createParticipantInputSchema = z.strictObject({
   kind: participantKindSchema,
   avatarColor: colorSchema.optional(),
 });
+
+export const renameParticipantInputSchema = z.strictObject({ name: handleSchema });
 
 export const createLabelInputSchema = z.strictObject({ name: labelNameSchema, color: colorSchema });
 
@@ -619,6 +622,29 @@ export class WorkboardService {
       this.events?.publish("participant.created", null);
       return toParticipantDto(row);
     } catch (error) {
+      if (error instanceof Error && /UNIQUE constraint/.test(error.message)) {
+        throw new ConflictError("A participant with that name already exists.");
+      }
+      throw error;
+    }
+  }
+
+  renameParticipant(actor: Actor, participantId: number, input: unknown): ParticipantDto {
+    void actor;
+    const parsed = parseInput(renameParticipantInputSchema, input);
+    const existing = getParticipantById(this.db, participantId);
+    if (existing === null) {
+      throw new NotFoundError("Participant", participantId);
+    }
+    try {
+      const row = updateParticipantNameRow(this.db, participantId, parsed.name);
+      if (row === null) {
+        throw new NotFoundError("Participant", participantId);
+      }
+      this.events?.publish("participant.updated", null);
+      return toParticipantDto(row);
+    } catch (error) {
+      if (error instanceof NotFoundError) throw error;
       if (error instanceof Error && /UNIQUE constraint/.test(error.message)) {
         throw new ConflictError("A participant with that name already exists.");
       }

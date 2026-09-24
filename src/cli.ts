@@ -95,17 +95,32 @@ function printJson(value: unknown): void {
 // ---------------------------------------------------------------------------
 // Commands
 
-function runInit(ctx: CommandContext): number {
+function runInit(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set(["admin"]));
   const db = initializeDatabase(ctx.dataDir);
   try {
     const service = new WorkboardService(db);
-    const existing = service.listParticipants(LOCAL_ACTOR_BOOTSTRAP);
-    if (existing.length === 0) {
-      service.createParticipant(LOCAL_ACTOR_BOOTSTRAP, { name: "local", kind: "human" });
+    const firstInit = service.listParticipants(LOCAL_ACTOR_BOOTSTRAP).length === 0;
+    const adminName = value(args, "admin") === "" ? "admin" : value(args, "admin") ?? "admin";
+    let bootstrapToken: string | undefined;
+    if (firstInit) {
+      const admin = service.createParticipant(LOCAL_ACTOR_BOOTSTRAP, { name: adminName, kind: "human" });
+      // The bootstrap token always exists (it is the only credential the init
+      // output could ever print again — plaintext is never persisted, the DB
+      // stores a hash). --hide-token only suppresses the printing.
+      bootstrapToken = issueToken(db, { participantId: admin.id, name: "bootstrap", now: systemClock.now() }).plaintext;
+      if (flag(args, "hide-token")) bootstrapToken = undefined;
     }
     const message = `Initialized workboard at ${ctx.dataDir}`;
-    if (flag(ctx.globalArgs, "json")) printJson({ dataDir: ctx.dataDir, initialized: true });
-    else console.log(message);
+    if (flag(ctx.globalArgs, "json")) {
+      printJson({ dataDir: ctx.dataDir, initialized: true, ...(bootstrapToken ? { token: bootstrapToken } : {}) });
+    } else {
+      console.log(message);
+      if (bootstrapToken !== undefined) {
+        console.error("Store this token now; it is not shown again.");
+        console.log(bootstrapToken);
+      }
+    }
     return 0;
   } finally {
     db.close();
@@ -417,7 +432,7 @@ async function runMcpCommand(ctx: CommandContext): Promise<number> {
 }
 
 async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Promise<number> {
-  const args = parseArgs(rest, new Set(["host", "port"]));
+  const args = parseArgs(rest, new Set(["host", "port", "token"]));
   const host = value(args, "host") ?? "127.0.0.1";
   const portRaw = value(args, "port") ?? process.env.WORKBOARD_PORT ?? "8765";
   const port = Number(portRaw);
@@ -445,9 +460,43 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
       disableIdleTimeout: (request) => server?.timeout(request, 0),
     });
     server = Bun.serve({ hostname: host, port, fetch: handler });
-    console.error(`workboard listening on http://${host}:${server.port}`);
-    console.error(`  REST:  http://${host}:${server.port}/api/health`);
-    console.error(`  MCP:   http://${host}:${server.port}/mcp`);
+    // One write so the banner cannot be split across pipe chunks mid-line.
+    const lines = [
+      `workboard listening on http://${host}:${server.port}`,
+      `  REST:  http://${host}:${server.port}/api/health`,
+      `  MCP:   http://${host}:${server.port}/mcp`,
+    ];
+    // The link carries the token in a URL fragment: a fragment never reaches
+    // the server, and the web client stores it and strips it from the address
+    // bar immediately (see consumeTokenFromHash in src/web/api.js).
+    //
+    // With no --token/--hide-token, serve mints its own session credential for
+    // the default human participant (admin, else the first human, else the
+    // first participant) so the link opens a signed-in web UI with no extra
+    // commands. It is revoked when this serve exits, so nothing lingers.
+    let sessionTokenId: number | null = null;
+    let tokenForLink = value(args, "token") ?? process.env.WORKBOARD_TOKEN;
+    if (!flag(args, "hide-token") && (tokenForLink === undefined || tokenForLink === "")) {
+      const participants = service.listParticipants(LOCAL_ACTOR_BOOTSTRAP);
+      const lowered = "admin";
+      const target =
+        participants.find((participant) => participant.name.toLowerCase() === lowered && participant.kind === "human") ??
+        participants.find((participant) => participant.kind === "human") ??
+        participants[0];
+      if (target !== undefined) {
+        const issued = issueToken(db, { participantId: target.id, name: "serve-session", now: systemClock.now() });
+        tokenForLink = issued.plaintext;
+        sessionTokenId = issued.token.id;
+      }
+    }
+    if (flag(args, "hide-token")) {
+      lines.push(`  Web:   http://${host}:${server.port}/`);
+    } else if (tokenForLink !== undefined && tokenForLink !== "") {
+      lines.push(`  Web UI: http://${host}:${server.port}/#token=${tokenForLink}`);
+    } else {
+      lines.push(`  Web:   http://${host}:${server.port}/ (no participant to sign in as; run: workboard init)`);
+    }
+    console.error(lines.join("\n"));
 
     await new Promise<void>((resolve) => {
       let stopping = false;
@@ -455,6 +504,9 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
         if (stopping) return;
         stopping = true;
         server.stop(true);
+        if (sessionTokenId !== null) {
+          db.run("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", [systemClock.now(), sessionTokenId]);
+        }
         resolve();
       };
       process.on("SIGINT", stop);
@@ -533,6 +585,29 @@ function runParticipant(ctx: CommandContext, rest: readonly string[]): number {
       const created = service.createParticipant(actor, { name, kind });
       if (flag(ctx.globalArgs, "json")) printJson(created);
       else console.log(`Created participant #${created.id}: ${created.name} (${created.kind})`);
+      return 0;
+    }
+    if (subcommand === "rename") {
+      const current = args.positionals[1];
+      const newName = value(args, "name");
+      if (current === undefined || current.length === 0) fail("a participant is required: workboard participant rename <name> --name <new>");
+      if (newName === undefined || newName.length === 0) fail("--name <new name> is required");
+      const lowered = current.toLowerCase();
+      const target = service.listParticipants(actor).find((participant) => participant.name.toLowerCase() === lowered);
+      if (target === undefined) fail(`no participant named '${current}'`);
+      try {
+        const renamed = service.renameParticipant(actor, target.id, { name: newName });
+        if (flag(ctx.globalArgs, "json")) printJson(renamed);
+        else console.log(`Renamed participant #${renamed.id} to ${renamed.name}`);
+      } catch (error) {
+        if (error instanceof WorkboardError && error.code === "CONFLICT") {
+          fail(`a participant named '${newName}' already exists`);
+        }
+        if (error instanceof WorkboardError && (error.code === "VALIDATION")) {
+          fail(error instanceof Error ? error.message : String(error));
+        }
+        throw error;
+      }
       return 0;
     }
     // Default: list participants.
@@ -634,7 +709,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
 
     switch (command) {
       case "init":
-        return runInit(ctx);
+        return runInit(ctx, commandArgs);
       case "add":
         return runAdd(ctx, commandArgs);
       case "list":
@@ -695,7 +770,7 @@ function printUsage(): void {
       "Usage: workboard <command> [options]",
       "",
       "Commands:",
-      "  init                        Create the data directory and database",
+      "  init [--admin <name>]      Create data dir, database, and the default human participant (default: admin); prints its access token once unless --hide-token",
       "  add <title> [options]       Create an item (--type --parent --body --priority --labels --assignee)",
       "  list [filters]              List items (--type --status --assignee --label --q --limit --cursor)",
       "  view <id>                   Show one item with relationships, comments, and history",
@@ -703,8 +778,9 @@ function printUsage(): void {
       "  comment <id> <text>         Comment on an item (@name mentions notify)",
       "  relationship <action> ...  Add, remove, or list item relationships",
       "  reorder <id> [options]      Move item (--parent <id|root> --before <id|end>)",
-      "  serve [--host] [--port]     Run the HTTP server (REST + MCP)",
+      "  serve [--host] [--port]     Run the HTTP server (REST + MCP); prints a sign-in link with a self-issued session token (unless --hide-token); --token uses your plaintext instead",
       "  participant add             Add a participant (--name <name> --kind human|agent); no args lists",
+      "  participant rename <n>      Rename a participant (--name <new name>)",
       "  token create                Issue an API token (--participant <name> --name <label>)",
       "  token revoke                Revoke a token (--id <id>)",
       "  backup                      Consistent snapshot (--output <file>)",
