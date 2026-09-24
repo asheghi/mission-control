@@ -11,3 +11,4 @@ workboard
 *.db
 *.db-wal
 *.db-shm
+workboard-data/workboard.pid
