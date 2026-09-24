@@ -32,6 +32,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .topbar nav a.active { color: var(--wb-color-nav-active-fg); background: var(--wb-color-accent-subtle); }
 .topbar nav a.active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--wb-color-active-indicator); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
+.theme-toggle { width: 2rem; min-width: 2rem; min-height: 2rem; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-surface-raised); color: var(--wb-color-fg-muted); touch-action: manipulation; }
+.theme-toggle:hover { color: var(--wb-color-fg-default); }
+.theme-icon { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .live-indicator { display: inline-flex; align-items: center; gap: 6px; color: var(--wb-color-fg-muted); font-size: 12px; white-space: nowrap; }
 .live-label { font-weight: 600; }
 .live-indicator::before { content: ""; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--wb-color-success-emphasis); box-shadow: 0 0 0 3px var(--wb-color-success-subtle); }
@@ -229,7 +232,8 @@ main.content { padding-top: var(--wb-space-5); }
 .eyebrow { margin: 0 0 var(--wb-space-1); color: var(--wb-color-accent-fg); font-size: var(--wb-font-size-xs); font-weight: var(--wb-font-weight-semibold); letter-spacing: .06em; text-transform: uppercase; }
 
 .auth-shell { width: min(100%, 27rem); margin: 10vh auto 0; }
-.auth-brand { display: flex; align-items: center; justify-content: center; gap: var(--wb-space-2); margin-bottom: var(--wb-space-5); font-size: var(--wb-font-size-lg); font-weight: var(--wb-font-weight-semibold); }
+.auth-header { display: flex; align-items: center; justify-content: space-between; gap: var(--wb-space-3); margin-bottom: var(--wb-space-5); }
+.auth-brand { display: flex; align-items: center; justify-content: center; gap: var(--wb-space-2); margin-bottom: 0; font-size: var(--wb-font-size-lg); font-weight: var(--wb-font-weight-semibold); }
 .login { width: 100%; max-width: none; margin: 0; padding: var(--wb-space-6); gap: var(--wb-space-3); border-top: 3px solid var(--wb-color-accent-emphasis); box-shadow: var(--wb-shadow-small); }
 .login::before { display: none; }
 .login-heading { margin-bottom: var(--wb-space-2); }
@@ -485,10 +489,12 @@ main.content { padding-top: var(--wb-space-5); }
   .backlog-move-button,
   button.tab,
   .mention-option { min-width: 2.75rem; }
+  .theme-toggle { width: 2.75rem; min-width: 2.75rem; }
 }
 
 @media (max-width: 640px) {
   button, input, select { min-height: 2.75rem; }
+  .theme-toggle { width: 2.75rem; min-width: 2.75rem; }
   .topbar-actions button,
   .board-card select,
   .quick-add input,

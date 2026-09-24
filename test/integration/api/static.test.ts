@@ -584,6 +584,9 @@ describe("static web shell", () => {
       expect(servedAppJs).toContain("MissionControl home");
       expect(servedAppJs).toContain("Primary navigation");
       expect(servedAppJs).toContain("Sign out");
+      expect(servedAppJs).toContain("theme-toggle");
+      expect(servedAppJs).toContain("theme-icon");
+      expect(servedAppJs).toContain("Switch to ");
       expect(servedAppJs).toContain("live-indicator");
       // The shell is a Preact render into the single host element.
       expect(servedAppJs).toContain("getElementById");
@@ -680,6 +683,11 @@ describe("static web shell", () => {
     // Theme integration overrides tokens rather than component selectors.
     expect(css).toContain("color-scheme:light dark");
     expect(css).toContain("@media (prefers-color-scheme:dark)");
+    expect(css).toMatch(/:root:not\(\[data-theme=light\]\)/);
+    expect(css).toMatch(/:root\[data-theme=light\]/);
+    expect(css).toMatch(/:root\[data-theme=dark\]/);
+    expect(css).toContain("color-scheme:light");
+    expect(css).toContain("color-scheme:dark");
     // The dark block re-declares the semantic tokens; it must not simply repeat
     // the light values under a component selector.
     const darkBlock = css.slice(css.indexOf("@media (prefers-color-scheme:dark)"));

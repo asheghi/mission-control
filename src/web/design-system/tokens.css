@@ -100,7 +100,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --wb-color-canvas-default: #1f1f1f;
     --wb-color-canvas-subtle: #181818;
     --wb-color-canvas-inset: #141414;
@@ -150,4 +150,63 @@
     --wb-shadow-medium: 0 2px 8px rgba(0, 0, 0, 0.46);
     --wb-shadow-large: 0 8px 24px rgba(0, 0, 0, 0.58);
   }
+}
+
+/* Explicit overrides mirror the system-dark token set so a manual Dark choice
+   works even when the operating system is currently using Light. System remains
+   the default path: without data-theme, the media query above owns the choice. */
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --wb-color-canvas-default: #1f1f1f;
+  --wb-color-canvas-subtle: #181818;
+  --wb-color-canvas-inset: #141414;
+  --wb-color-fg-default: #f0f0f0;
+  --wb-color-fg-muted: #adadad;
+  --wb-color-border-default: #525252;
+  --wb-color-border-muted: #3d3d3d;
+  --wb-color-accent-fg: #58a6e7;
+  --wb-color-accent-emphasis: #0078d4;
+  --wb-color-accent-emphasis-hover: #2899f5;
+  --wb-color-accent-muted: rgba(88, 166, 231, 0.45);
+  --wb-color-accent-subtle: rgba(0, 120, 212, 0.18);
+  --wb-color-success-fg: #3fb950;
+  --wb-color-success-emphasis: #238636;
+  --wb-color-success-emphasis-hover: #1f6f2d;
+  --wb-color-success-subtle: rgba(46, 160, 67, 0.15);
+  --wb-color-attention-fg: #d29922;
+  --wb-color-attention-subtle: rgba(187, 128, 9, 0.15);
+  --wb-color-danger-fg: #ff7b72;
+  --wb-color-danger-emphasis: #da3633;
+  --wb-color-danger-subtle: rgba(248, 81, 73, 0.1);
+  --wb-color-done-fg: #d2a8ff;
+  --wb-color-done-muted: rgba(210, 168, 255, 0.4);
+  --wb-color-done-subtle: rgba(210, 168, 255, 0.12);
+  --wb-color-neutral-emphasis: #6e7681;
+  --wb-color-neutral-subtle: rgba(175, 184, 193, 0.2);
+  --wb-color-danger-muted: rgba(248, 81, 73, 0.4);
+  --wb-color-attention-muted: rgba(210, 153, 34, 0.4);
+  --wb-color-success-muted: rgba(63, 185, 80, 0.4);
+  --wb-color-avatar-human-bg: #0078d4;
+  --wb-color-avatar-agent-bg: #6264a7;
+  --wb-color-avatar-fg: #ffffff;
+  --wb-color-focus-outline: #58a6e7;
+  --wb-color-active-indicator: #58a6e7;
+  --wb-color-nav-active-fg: #f0f0f0;
+  --wb-color-header-bg: #242424;
+  --wb-color-surface-raised: #242424;
+  --wb-color-surface-sunken: #181818;
+  --wb-color-overlay: rgba(0, 0, 0, 0.72);
+  --wb-color-info-fg: #75b8ed;
+  --wb-color-info-subtle: rgba(0, 120, 212, 0.18);
+  --wb-color-info-muted: rgba(88, 166, 231, 0.45);
+  --wb-color-control-hover: #333333;
+  --wb-color-control-active: #3d3d3d;
+  --wb-color-skeleton: #333333;
+  --wb-shadow-small: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --wb-shadow-medium: 0 2px 8px rgba(0, 0, 0, 0.46);
+  --wb-shadow-large: 0 8px 24px rgba(0, 0, 0, 0.58);
 }

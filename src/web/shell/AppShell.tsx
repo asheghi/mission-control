@@ -5,10 +5,42 @@ import { views } from "../views";
 import { createLiveRefreshController, canonicalHash, liveIndicatorState, navigationState, resolveHashRoute } from "../ui-state.js";
 import { ViewHost } from "./ViewHost";
 import { safeErrorMessage } from "./safe-error";
+import { applyThemePreference, readThemePreference, resolvedTheme as getResolvedTheme, saveThemePreference, systemTheme, THEME_STORAGE_KEY, type ResolvedTheme, type ThemePreference } from "../theme";
 import type { ComponentViewDefinition, EventStreamHandle, LiveController, ViewRoute } from "./types";
 
-interface LoginProps {
+interface ThemeControlProps {
+  theme: ResolvedTheme;
+  onToggle: () => void;
+}
+
+interface LoginProps extends ThemeControlProps {
   onSignedIn: (hash: string) => void;
+}
+
+function ThemeControl({ theme, onToggle }: ThemeControlProps) {
+  const nextTheme = theme === "dark" ? "light" : "dark";
+  const label = `Switch to ${nextTheme} theme`;
+  return (
+    <button
+      type="button"
+      class="theme-toggle"
+      aria-label={label}
+      aria-pressed={theme === "dark"}
+      title={label}
+      onClick={onToggle}
+    >
+      {theme === "dark" ? (
+        <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" />
+        </svg>
+      ) : (
+        <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M20.6 15.2A8.5 8.5 0 0 1 8.8 3.4 8.5 8.5 0 1 0 20.6 15.2Z" />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 function validCurrentHash(): string {
@@ -19,7 +51,7 @@ function validCurrentHash(): string {
   return "#/backlog";
 }
 
-function Login({ onSignedIn }: LoginProps) {
+function Login({ onSignedIn, theme, onToggle }: LoginProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const requestGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
@@ -57,9 +89,12 @@ function Login({ onSignedIn }: LoginProps) {
 
   return (
     <div class="auth-shell">
-      <div class="auth-brand" aria-hidden="true">
-        <span class="brand-mark"><span /><span /><span /></span>
-        <span>MissionControl</span>
+      <div class="auth-header">
+        <div class="auth-brand" aria-hidden="true">
+          <span class="brand-mark"><span /><span /><span /></span>
+          <span>MissionControl</span>
+        </div>
+        <ThemeControl theme={theme} onToggle={onToggle} />
       </div>
       <form class="card login" onSubmit={submit}>
         <div class="login-heading">
@@ -86,12 +121,47 @@ function Login({ onSignedIn }: LoginProps) {
 
 export function AppShell() {
   const [signedIn, setSignedIn] = useState(() => Boolean(api.getToken()));
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => readThemePreference());
+  const [activeTheme, setActiveTheme] = useState<ResolvedTheme>(() => getResolvedTheme(themePreference));
   const [hash, setHash] = useState(() => location.hash || "#/backlog");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [connected, setConnected] = useState(false);
   const feedRef = useRef<EventStreamHandle | null>(null);
   const startFeedRef = useRef<() => void>(() => undefined);
   const refreshViewRef = useRef<() => void>(() => undefined);
+
+  const toggleTheme = useCallback(() => {
+    const preference: ThemePreference = activeTheme === "dark" ? "light" : "dark";
+    saveThemePreference(preference);
+    setThemePreference(preference);
+    setActiveTheme(preference);
+  }, [activeTheme]);
+
+  useEffect(() => {
+    applyThemePreference(themePreference);
+    setActiveTheme(getResolvedTheme(themePreference));
+  }, [themePreference]);
+
+  useEffect(() => {
+    if (themePreference !== "system" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const synchronizeSystemTheme = () => setActiveTheme(systemTheme());
+    synchronizeSystemTheme();
+    media.addEventListener("change", synchronizeSystemTheme);
+    return () => media.removeEventListener("change", synchronizeSystemTheme);
+  }, [themePreference]);
+
+  useEffect(() => {
+    const synchronizeTheme = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== THEME_STORAGE_KEY) return;
+      const preference = readThemePreference();
+      applyThemePreference(preference);
+      setThemePreference(preference);
+      setActiveTheme(getResolvedTheme(preference));
+    };
+    window.addEventListener("storage", synchronizeTheme);
+    return () => window.removeEventListener("storage", synchronizeTheme);
+  }, []);
 
   refreshViewRef.current = () => setRefreshGeneration((value) => value + 1);
 
@@ -197,10 +267,14 @@ export function AppShell() {
   if (!signedIn) {
     return (
       <main class="content">
-        <Login onSignedIn={(destination) => {
-          setHash(destination);
-          setSignedIn(true);
-        }} />
+        <Login
+          theme={activeTheme}
+          onToggle={toggleTheme}
+          onSignedIn={(destination) => {
+            setHash(destination);
+            setSignedIn(true);
+          }}
+        />
       </main>
     );
   }
@@ -233,6 +307,7 @@ export function AppShell() {
           ))}
         </nav>
         <div class="topbar-actions">
+          <ThemeControl theme={activeTheme} onToggle={toggleTheme} />
           <span
             class={`live-indicator${live.connection === "connected" ? "" : " offline"}`}
             role="status"
