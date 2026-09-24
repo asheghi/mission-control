@@ -82,13 +82,15 @@ explicit `init` is optional but recommended.
 ## 3. Getting started: your first board
 
 ```bash
-./workboard init                       # create data dir + DB + a 'local' human participant
-./workboard participant add --name me --kind human     # yourself
-./workboard token create --participant me --name browser-session         # see §8
-./workboard serve --port 8765          # Web UI + REST + MCP over HTTP
+./workboard init                       # data dir + DB + an 'admin' human participant;
+                                       # prints that participant's access token once
+./workboard serve --port 8765          # Web UI + REST + MCP, prints a sign-in link with
+                                       # a self-issued session token
 ```
 
-Now open `http://127.0.0.1:8765` and start working. Everything below goes
+Sign in by opening the printed `#token=` link — no extra commands needed.
+`init --admin <name>` chooses the default human's name; `init --hide-token`
+and `serve --hide-token` suppress token output. Everything below goes
 into more detail.
 
 ---
@@ -134,11 +136,18 @@ All commands share the global options below.
 
 ### Command reference
 
-**init** — create the data directory, DB schema, and a default `local`
-human participant.
+**init** — create the data directory, DB schema, and a default human
+participant named `admin` (override with `--admin <name>`). On first init it
+also issues that participant's access token and prints it once with a
+"Store this token now" warning (`--json` includes it as `token`);
+`--hide-token` suppresses only the printing — the token still exists and is
+never stored in plaintext anywhere. Re-running init is a no-op and prints
+nothing sensitive.
 
 ```bash
 workboard init
+workboard init --admin bahman
+workboard init --hide-token
 ```
 
 **add** — create an item.
@@ -188,11 +197,15 @@ workboard update 12 --labels bug,p1     # replaces the label set
 workboard comment 12 "Deployed the fix in 4f2e — @me please verify"
 ```
 
-**participant** — list, or add with `--name <name> --kind human|agent`.
+**participant** — list, add with `--name <name> --kind human|agent`, or
+rename with `participant rename <name> --name <new>` (name comparisons are
+case-insensitive; renaming to an existing name is rejected with a clear
+conflict error).
 
 ```bash
 workboard participant
 workboard participant add --name codex --kind agent
+workboard participant rename bahman --name lead
 ```
 
 **token** — issue/revoke API tokens (see §8):
@@ -281,6 +294,7 @@ the credential binds the actor).
 | `GET /api/me/work` | Your own queue (like `my_work`) |
 | `GET /api/labels`, `POST /api/labels` | List/create labels |
 | `GET /api/participants`, `POST /api/participants` | List/create participants |
+| `PATCH /api/participants/:id` | Rename a participant (`{"name": "new"}`) |
 | `GET /api/events` | SSE stream of changes (drives the live Web UI) |
 | `POST /mcp` | MCP over Streamable HTTP |
 
@@ -292,8 +306,10 @@ item's history; a single request's writes share one timestamp.
 ## 8. Accounts, tokens & who did what
 
 **Participants** live in the DB; add them via CLI
-(`participant add --name <n> --kind human|agent`) or REST
-(`POST /api/participants`).
+(`participant add --name <n> --kind human|agent`), rename them with
+`participant rename <name> --name <new>`, or manage via REST
+(`POST /api/participants`, `PATCH /api/participants/:id`). The default
+human participant created by `workboard init` is `admin` unless renamed.
 
 **API tokens** authenticate HTTP callers (the web UI also has an
 authenticated session flow). Token lifecycle:
@@ -305,6 +321,9 @@ workboard token create --participant claude --name codex-agent
 workboard token revoke --id 3
 ```
 
+- `init` (first init) prints the `admin` token the same way, and `serve`
+  prints a sign-in link with a self-issued `serve-session` token that is
+  revoked when serve exits.
 - A token is bound to one participant; whichever token (or session) the
   caller presents becomes the actor.
 - Revoking makes it fail immediately (`revoked_at` is set; reuse gives an
@@ -329,7 +348,12 @@ workboard doctor [--host <host>] [--port <port>]
 - **serve**: binds loopback by default (`--host`/`--port`, or
   `WORKBOARD_PORT`). It takes a cooperative PID lock in the data directory;
   if another `serve` already holds it, you get a warning on stderr (SQLite
-  tolerates multiple readers, but see restore below).
+  tolerates multiple readers, but see restore below). The banner prints a
+  `Web UI: http://<host>:<port>/#token=<token>` sign-in link using a
+  self-issued `serve-session` token (bound to the `admin` human participant,
+  falling back to the first human, then the first participant) that is
+  revoked when serve exits. `--token <plaintext>` / `WORKBOARD_TOKEN` supply
+  your own token instead; `--hide-token` prints the plain URL only.
 - **backup**: a consistent snapshot of the SQLite database
   (default output path derived from the data dir + timestamp).
 - **restore**: refuses to overwrite an existing database without `--force`.
