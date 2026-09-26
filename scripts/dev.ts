@@ -56,8 +56,11 @@ function parseOptions(argv: readonly string[]): Options {
     throw new Error(`invalid --port: ${flags.get("port")}`);
   }
   return {
-    // `.tmp/` is gitignored, so the throwaway board never shows up in git.
-    dataDir: flags.get("dir") ?? join(process.cwd(), ".tmp", "dev-board"),
+    // The current directory doubles as the data directory: `workboard.sqlite`
+    // and `workboard.pid` are created right here. Those files are gitignored
+    // (see .gitignore), so a checkout never shows the board in git. Pass
+    // `--dir <path>` to keep the board somewhere else.
+    dataDir: flags.get("dir") ?? process.cwd(),
     participant: flags.get("as") ?? "dev",
     host: flags.get("host") ?? "127.0.0.1",
     port,
