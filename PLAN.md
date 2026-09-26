@@ -173,6 +173,9 @@ Implementation proceeds with these defaults:
 6. Item deletion is hard deletion in v1 and requires confirmation in the web UI.
 7. Concurrent patches to different fields are preserved; same-field updates are last-write-wins.
 8. Mentions in Markdown code spans and fenced code count in v1 because mention extraction scans raw text.
-9. The public MCP surface is exactly the six tools listed above; `claim_next` remains deferred.
+9. The public MCP surface is exactly the six tools listed above; `claim_next`
+   remains deferred. (Superseded 2026-09: the shipped surface is nine tools —
+   relationship add/remove and reorder joined with the work-item model; see
+   AGENTS.md.)
 10. HTTP MCP is protocol-stateless. Compatibility with the MCP revision supported by the real DSH client takes priority over targeting an unverified newer wire revision.
 11. Workboard binds to loopback by default. Remote exposure requires explicit host/origin settings and TLS at a trusted reverse proxy.

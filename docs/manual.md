@@ -39,10 +39,14 @@ and history work identically for both kinds.
 
 ### Work items
 
-Each item has a title, a markdown body, a **status**, a **priority**
-(0–3, default 2; lower = more urgent), an optional assignee, and optional
-labels. Comments thread under the item, and every field change is recorded
-in the item's history.
+Each item has a title, a markdown body, a **type** (`feature`, `user_story`,
+`bug`, or `task`), a **status**, a **priority** (0–3, default 2; lower = more
+urgent), an optional assignee, and optional labels. An item can have a
+**parent** (a task must always have one; any type may parent any other) and
+non-hierarchical **relationships** to other items (`related`, `predecessor`,
+`successor`, `duplicate`, `duplicate_of`). Unfinished siblings sit in an
+ordered **backlog** position. Comments thread under the item, and every field
+change is recorded in the item's history.
 
 ```
 todo → doing → done
@@ -187,6 +191,8 @@ workboard view 12
 ```bash
 workboard update 12 --status doing
 workboard update 12 --priority 0 --assignee me
+workboard update 12 --type task --parent 7
+workboard update 12 --detach             # clear the parent (tasks need one)
 workboard update 12 --unassign          # clear the assignee
 workboard update 12 --labels bug,p1     # replaces the label set
 ```
@@ -195,6 +201,25 @@ workboard update 12 --labels bug,p1     # replaces the label set
 
 ```bash
 workboard comment 12 "Deployed the fix in 4f2e — @me please verify"
+```
+
+**relationship** — non-hierarchical links between items.
+
+```bash
+workboard relationship add 12 predecessor 14
+workboard relationship remove 12 3
+workboard relationship list 12
+```
+
+- Names: `related`, `predecessor`, `successor`, `duplicate`, `duplicate_of`.
+  Parent/child hierarchy is not a relationship; set it on update.
+
+**reorder** — move an item within sibling backlog order.
+
+```bash
+workboard reorder 12 --parent 4 --before 15
+workboard reorder 12 --parent 4          # append to the end of #4's children
+workboard reorder 12 --parent root       # rejected for tasks
 ```
 
 **participant** — list, add with `--name <name> --kind human|agent`, or
@@ -230,7 +255,7 @@ workboard --json add "New item" | jq '.item.id'    # capture the id
 
 ## 6. The agent loop (MCP)
 
-Agents get the same board through six MCP tools. The actor is derived from
+Agents get the same board through nine MCP tools. The actor is derived from
 the presented credential/context — never from tool arguments — so an agent
 cannot act as someone else.
 
@@ -252,16 +277,19 @@ for JSON-RPC.)
 HTTP**: each request stands alone, so it survives restarts and reconnects
 without session state.
 
-### The six tools
+### The nine tools
 
 | Tool | What it does |
 |---|---|
 | `my_work` | The agent's queue: items assigned to or mentioning it, open items first, then most recently updated. Supports `limit` (1–100) and `cursor`. |
-| `list_work` | Filter the board: `status`, `assignee` (name, numeric id, or `"unassigned"`), `label`, `q`, `limit`, `cursor`. Unknown assignee names return an empty result, not an error. |
-| `get_work` | One item by numeric `id`, including comments and history. |
-| `create_work` | `title` (required, ≤120 chars), optional `body` (≤10 000), `priority` 0–3, `assigneeId` (participant id or null), `labels` (array of names — must exist). |
-| `update_work` | Partial patch by `id`; only provided fields change; `assigneeId: null` unassigns; `labels` replaces the whole set. |
+| `list_work` | Filter the board: `type` (`feature|user_story|bug|task`), `status`, `assignee` (name, numeric id, or `"unassigned"`), `label`, `q`, `limit`, `cursor`. Unknown assignee names return an empty result, not an error. |
+| `get_work` | One item by numeric `id`, including parent, children, relationships, comments, and history. |
+| `create_work` | `title` (required, ≤120 chars), optional `type`, `body` (≤10 000), `priority` 0–3, `assigneeId` (participant id or null), `parentId`, `labels` (array of names — must exist). A `task` requires `parentId`. |
+| `update_work` | Partial patch by `id`, including `type` and `parentId`; only provided fields change; `assigneeId: null` unassigns; `parentId: null` moves to root (rejected for tasks); `labels` replaces the whole set. |
 | `comment` | Add `body` to item `id`; `@name` mentions surface the item in the mentioned participant's `my_work`. |
+| `add_work_relationship` | Add a non-hierarchical relationship relative to `id`: `related`, `predecessor`, `successor`, `duplicate`, or `duplicate_of`. |
+| `remove_work_relationship` | Remove one relationship by its id from the selected item. |
+| `reorder_work` | Move an item within sibling backlog order: `parentId` (null = root), optional `beforeId` (null = append). Tasks cannot move to root. |
 
 ### The loop, concretely
 
@@ -285,11 +313,15 @@ the credential binds the actor).
 | Method & path | Purpose |
 |---|---|
 | `GET /api/health` | Liveness |
-| `GET /api/items` | List (same filters as CLI: `status`, `assignee`, `label`, `q`, `limit`, `cursor`) |
+| `GET /api/items` | List (same filters as CLI: `type`, `status`, `assignee`, `label`, `q`, `limit`, `cursor`) |
+| `GET /api/backlog` | All unfinished items in backlog order — uncapped, unpaginated |
 | `POST /api/items` | Create |
-| `GET /api/items/:id` | Detail with comments + history |
+| `GET /api/items/:id` | Detail with parent, children, relationships, comments + history |
 | `PATCH /api/items/:id` | Partial update |
 | `DELETE /api/items/:id` | Remove |
+| `POST /api/items/:id/relationships` | Add a relationship (`related`, `predecessor`, `successor`, `duplicate`, `duplicate_of`) |
+| `DELETE /api/items/:id/relationships/:relationshipId` | Remove a relationship |
+| `POST /api/items/:id/reorder` | Move within sibling backlog order |
 | `POST /api/items/:id/comments` | Comment |
 | `GET /api/me/work` | Your own queue (like `my_work`) |
 | `GET /api/labels`, `POST /api/labels` | List/create labels |
@@ -382,7 +414,7 @@ the right one instead.
 You didn't pass `--as` or set `WORKBOARD_USER`.
 
 **Q: Where's my data?**
-One SQLite file (`workboard.db`) plus WAL files inside the data directory
+One SQLite file (`workboard.sqlite`) plus WAL files inside the data directory
 (default `./workboard-data`; override with `--dir`/`WORKBOARD_DATA_DIR`).
 
 **Q: Why does `restore --force` fail?**

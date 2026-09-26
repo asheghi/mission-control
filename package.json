@@ -14,7 +14,7 @@
     "workboard": "bun run src/entry.ts",
     "typecheck": "bun run build:web && tsc --noEmit",
     "test": "bun run build:web && bun test",
-    "test:e2e": "bun test test/e2e",
+    "test:e2e": "bun run build && bun test test/e2e",
     "build": "bun run build:web && bun build ./src/entry.ts --compile --outfile dist/workboard"
   },
   "dependencies": {

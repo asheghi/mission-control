@@ -25,8 +25,11 @@ todo → doing → done
          └──→ blocked
 ```
 
-Each item has a title, markdown body, status, priority, optional assignee, and
-optional labels. Comments are threaded under the item.
+Each item has a title, markdown body, a type (`feature | user_story | bug |
+task`), status, priority, optional assignee, optional parent (a task must
+always have one), and optional labels. Unfinished siblings are ordered in a
+backlog, and items can carry non-hierarchical relationships (related,
+predecessor, successor, duplicate). Comments are threaded under the item.
 
 ## The loop
 
@@ -46,7 +49,8 @@ Same loop either direction — an agent can file an item and @mention a human.
 - **Web** — board and list views, item detail, assign dropdown, comment box with
   @mention autocomplete. This is how humans use it.
 - **MCP** — `list_work`, `my_work`, `get_work`, `create_work`, `update_work`,
-  `comment`. This is how agents use it.
+  `comment`, `add_work_relationship`, `remove_work_relationship`,
+  `reorder_work`. This is how agents use it.
 - **CLI** — the same operations for scripts and terminal humans.
 
 ## Deployment
