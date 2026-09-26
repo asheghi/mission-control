@@ -45,7 +45,7 @@ function InlineMarkdown({ token }: { token: InlineToken }) {
   if (token.kind === "text") return <>{token.text}</>;
   if (token.kind === "strong") return <strong>{token.text}</strong>;
   if (token.kind === "em") return <em>{token.text}</em>;
-  if (token.kind === "code") return <code>{token.text}</code>;
+  if (token.kind === "code") return <code translate={false}>{token.text}</code>;
   return token.link.external
     ? <a href={token.link.href} target="_blank" rel="noopener noreferrer">{token.text}</a>
     : <a href={token.link.href}>{token.text}</a>;
@@ -78,11 +78,12 @@ export function DetailHeader({ detail }: { detail: DetailState }) {
       <div class="detail-head">
         <div class="detail-title-area">
           <h1 class="detail-page-title">Work item #{item.id}</h1>
-          <label for="detail-title">Title</label>
+          <label for="detail-title" class="sr-only">Title</label>
           <input
             id="detail-title"
             class="detail-title-input"
             type="text"
+            name="title"
             value={detail.titleDraft}
             maxLength={256}
             autoComplete="off"
@@ -112,8 +113,8 @@ export function DetailHeader({ detail }: { detail: DetailState }) {
       </div>
       <div class="detail-meta muted">
         <span class={`chip status-chip status-${item.status}`}>{STATUS_LABELS[item.status] ?? item.status}</span>
-        <span>created {formatTime(item.createdAt)}</span>
-        {item.closedAt === null ? null : <span>· closed {formatTime(item.closedAt)}</span>}
+        <span>created <time dateTime={item.createdAt}>{formatTime(item.createdAt)}</time></span>
+        {item.closedAt === null ? null : <span>· closed <time dateTime={item.closedAt}>{formatTime(item.closedAt)}</time></span>}
       </div>
     </>
   );
@@ -147,8 +148,7 @@ export function FieldControls({ detail }: { detail: DetailState }) {
   // would misreport the item, exactly as an unknown assignee would.
   const typeIsUnknown = !DETAIL_WORK_ITEM_TYPES.includes(item.type);
   return (
-    <fieldset class="detail-controls card" aria-busy={busy}>
-      <legend class="sr-only">Item fields</legend>
+    <fieldset class="detail-controls card" aria-busy={busy} aria-label="Item fields">
       {/* The label names the control; the hint sits BESIDE it, not inside it.
           A span nested in a <label> joins the accessible name, so the combobox
           would be announced as "Type Task is available once this item has a
@@ -312,7 +312,7 @@ export function Relationships({ detail }: { detail: DetailState }) {
             if (parentId !== null) detail.setParent(parentId);
           }}>
             <label for="detail-parent-id">Parent item ID</label>
-            <div><input id="detail-parent-id" inputMode="numeric" pattern="[0-9]+" value={parentDraft} placeholder="e.g. 42" disabled={busy} onInput={(event) => setParentDraft(event.currentTarget.value)} /><button type="submit" disabled={busy || parseItemId(parentDraft) === null}>Set parent</button></div>
+            <div><input id="detail-parent-id" inputMode="numeric" pattern="[0-9]+" autoComplete="off" value={parentDraft} placeholder="e.g. 42…" disabled={busy} onInput={(event) => setParentDraft(event.currentTarget.value)} /><button type="submit" disabled={busy || parseItemId(parentDraft) === null}>Set parent</button></div>
           </form>
         ) : detail.item !== null && detail.item.type === "task" ? (
           <p class="muted">A {typeLabel("task")} must keep a parent. Change the type to detach it.</p>
@@ -337,7 +337,7 @@ export function Relationships({ detail }: { detail: DetailState }) {
           void detail.createSubtask(subtaskDraft).then((created) => { if (created) setSubtaskDraft(""); });
         }}>
           <label class="sr-only" for="detail-subtask-title">Add a child item</label>
-          <input id="detail-subtask-title" value={subtaskDraft} maxLength={256} placeholder="Add a child item…" disabled={busy} onInput={(event) => setSubtaskDraft(event.currentTarget.value)} />
+          <input id="detail-subtask-title" name="subtask-title" autoComplete="off" value={subtaskDraft} maxLength={256} placeholder="Add a child item…" disabled={busy} onInput={(event) => setSubtaskDraft(event.currentTarget.value)} />
           <button type="submit" disabled={busy || subtaskDraft.trim() === ""}>Add</button>
         </form>
       </div>
@@ -416,15 +416,16 @@ export function Relationships({ detail }: { detail: DetailState }) {
             pattern="[0-9]+"
             autoComplete="off"
             value={addItemId}
-            placeholder="e.g. 42"
+            placeholder="e.g. 42…"
             disabled={busy}
             aria-invalid={addItemId !== "" && !addItemIdIsValid}
+            aria-describedby={addItemId !== "" && !addItemIdIsValid ? "detail-relationship-item-error" : undefined}
             onInput={(event) => setAddItemId(event.currentTarget.value)}
           />
           <button type="submit" disabled={busy || !addIsComplete}>Add</button>
         </div>
         {addItemId === "" || addItemIdIsValid ? null : (
-          <span class="relationship-form-error">Enter the ID of an existing item, as a whole number.</span>
+          <span id="detail-relationship-item-error" class="relationship-form-error" role="status">Enter the ID of an existing item, as a whole number.</span>
         )}
       </form>
     </section>
@@ -524,7 +525,8 @@ export function BodyEditor({ detail }: { detail: DetailState }) {
         <label class="sr-only" for="detail-body-input">Edit description</label>
         <textarea id="detail-body-input" class="body-editor" rows={10} value={detail.bodyDraft}
           maxLength={100_000}
-          placeholder="Describe the work (markdown-lite: *italic*, **bold**, `code`, links)"
+          name="description"
+          placeholder="Describe the work (markdown-lite: *italic*, **bold**, `code`, links)…"
           onFocus={() => detail.setBodyFocused(true)}
           onBlur={() => { detail.setBodyFocused(false); void detail.flushBody(); }}
           onInput={(event) => detail.setBodyDraft(event.currentTarget.value)} />
@@ -564,7 +566,7 @@ export function CommentComposer({ detail }: { detail: DetailState }) {
         name="comment"
         maxLength={100_000}
         value={detail.commentDraft}
-        placeholder="Write a comment… use @ to mention someone"
+        placeholder="Write a comment; use @ to mention someone…"
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={detail.mention !== null}

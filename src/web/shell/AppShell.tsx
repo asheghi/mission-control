@@ -53,6 +53,7 @@ function validCurrentHash(): string {
 
 function Login({ onSignedIn, theme, onToggle }: LoginProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
   const requestGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -82,6 +83,9 @@ function Login({ onSignedIn, theme, onToggle }: LoginProps) {
       if (generation !== requestGeneration.current) return;
       api.setToken(null);
       setError(isTerminalAuthError(caught) ? "That token was not accepted." : `Sign-in failed: ${safeErrorMessage(caught)}`);
+      // The failure is the first thing a keyboard user lands on, so the next
+      // Tab press moves to the field that needs the corrected token.
+      errorRef.current?.focus();
     } finally {
       if (generation === requestGeneration.current) setBusy(false);
     }
@@ -108,11 +112,12 @@ function Login({ onSignedIn, theme, onToggle }: LoginProps) {
           ref={inputRef}
           type="password"
           name="api-token"
-          placeholder="Paste your token"
+          placeholder="Paste your token…"
           autoComplete="off"
+          spellcheck={false}
         />
         <div class="login-help">Need access? Ask an administrator to create a participant token.</div>
-        <div class="error" role="alert" aria-live="assertive">{error}</div>
+        <div ref={errorRef} class="error" role="alert" aria-live="assertive" tabIndex={-1}>{error}</div>
         <button class="primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
       </form>
     </div>

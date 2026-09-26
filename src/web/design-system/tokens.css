@@ -1,20 +1,23 @@
 :root {
   color-scheme: light dark;
 
-  /* Color */
+  /* Color — neutrals follow a Primer-style ramp: the page canvas is the subtle
+     layer, cards float on surface-raised, and borders are two steps apart so a
+     divider never shouts. Semantic hues keep their meanings: accent = primary
+     action and link, success = Done, attention = Blocked, danger = Bug/destructive. */
   --wb-color-canvas-default: #ffffff;
-  --wb-color-canvas-subtle: #f5f6f8;
-  --wb-color-canvas-inset: #eef0f3;
-  --wb-color-fg-default: #242424;
-  --wb-color-fg-muted: #616161;
+  --wb-color-canvas-subtle: #f6f8fa;
+  --wb-color-canvas-inset: #eef1f4;
+  --wb-color-fg-default: #1f2328;
+  --wb-color-fg-muted: #59636e;
   --wb-color-fg-on-emphasis: #ffffff;
-  --wb-color-border-default: #c8c8c8;
-  --wb-color-border-muted: #dedede;
-  --wb-color-accent-fg: #0067b8;
-  --wb-color-accent-emphasis: #0078d4;
-  --wb-color-accent-emphasis-hover: #106ebe;
-  --wb-color-accent-muted: rgba(0, 120, 212, 0.38);
-  --wb-color-accent-subtle: #e5f1fb;
+  --wb-color-border-default: #d1d9e0;
+  --wb-color-border-muted: #e7ecf1;
+  --wb-color-accent-fg: #0969da;
+  --wb-color-accent-emphasis: #1f6feb;
+  --wb-color-accent-emphasis-hover: #1a5fd0;
+  --wb-color-accent-muted: rgba(31, 111, 235, 0.35);
+  --wb-color-accent-subtle: #ddf4ff;
   --wb-color-success-fg: #1a7f37;
   --wb-color-success-emphasis: #1f883d;
   --wb-color-success-emphasis-hover: #1a7f37;
@@ -32,24 +35,24 @@
   --wb-color-danger-muted: rgba(255, 129, 130, 0.4);
   --wb-color-attention-muted: rgba(212, 167, 44, 0.4);
   --wb-color-success-muted: rgba(63, 185, 80, 0.4);
-  --wb-color-avatar-human-bg: #0078d4;
-  --wb-color-avatar-agent-bg: #5c5fc7;
+  --wb-color-avatar-human-bg: #0969da;
+  --wb-color-avatar-agent-bg: #8250df;
   --wb-color-avatar-fg: #ffffff;
-  --wb-color-focus-outline: #0078d4;
-  --wb-color-active-indicator: #0078d4;
-  --wb-color-nav-active-fg: #0067b8;
+  --wb-color-focus-outline: #0969da;
+  --wb-color-active-indicator: #1f6feb;
+  --wb-color-nav-active-fg: #1f2328;
   --wb-color-header-bg: #ffffff;
 
   /* Semantic surfaces */
   --wb-color-surface-raised: #ffffff;
-  --wb-color-surface-sunken: #f3f4f6;
-  --wb-color-overlay: rgba(36, 36, 36, 0.48);
-  --wb-color-info-fg: #005a9e;
-  --wb-color-info-subtle: #e5f1fb;
-  --wb-color-info-muted: rgba(0, 120, 212, 0.4);
-  --wb-color-control-hover: #f0f0f0;
-  --wb-color-control-active: #e5e5e5;
-  --wb-color-skeleton: #e6e6e6;
+  --wb-color-surface-sunken: #f6f8fa;
+  --wb-color-overlay: rgba(31, 35, 40, 0.48);
+  --wb-color-info-fg: #0550ae;
+  --wb-color-info-subtle: #ddf4ff;
+  --wb-color-info-muted: rgba(31, 111, 235, 0.4);
+  --wb-color-control-hover: #f3f4f6;
+  --wb-color-control-active: #e9ebef;
+  --wb-color-skeleton: #e7ecf1;
 
   /* Spacing */
   --wb-space-1: 0.25rem;
@@ -70,7 +73,7 @@
   --wb-font-size-default: 0.875rem;
   --wb-font-size-lg: 1rem;
   --wb-font-size-xl: 1.25rem;
-  --wb-font-size-2xl: 1.75rem;
+  --wb-font-size-2xl: 1.5rem;
   --wb-line-height-tight: 1.25;
   --wb-line-height-default: 1.5;
   --wb-line-height-relaxed: 1.65;
@@ -78,16 +81,16 @@
   --wb-font-weight-semibold: 600;
 
   /* Shape, controls, elevation, and motion */
-  --wb-radius-small: 0.125rem;
-  --wb-radius-medium: 0.25rem;
-  --wb-radius-large: 0.375rem;
+  --wb-radius-small: 0.375rem;
+  --wb-radius-medium: 0.5rem;
+  --wb-radius-large: 0.75rem;
   --wb-radius-pill: 999px;
   --wb-control-medium: 2rem;
   --wb-control-large: 2.5rem;
-  --wb-shadow-small: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --wb-shadow-medium: 0 2px 8px rgba(0, 0, 0, 0.12);
-  --wb-shadow-large: 0 8px 24px rgba(0, 0, 0, 0.16);
-  --wb-shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+  --wb-shadow-small: 0 1px 2px rgba(31, 35, 40, 0.06);
+  --wb-shadow-medium: 0 3px 8px rgba(31, 35, 40, 0.12);
+  --wb-shadow-large: 0 8px 24px rgba(31, 35, 40, 0.16);
+  --wb-shadow-inset: inset 0 1px 2px rgba(31, 35, 40, 0.04);
   --wb-duration-fast: 120ms;
   --wb-duration-medium: 180ms;
   --wb-ease-standard: cubic-bezier(0.2, 0, 0, 1);
@@ -101,18 +104,18 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --wb-color-canvas-default: #1f1f1f;
-    --wb-color-canvas-subtle: #181818;
-    --wb-color-canvas-inset: #141414;
-    --wb-color-fg-default: #f0f0f0;
-    --wb-color-fg-muted: #adadad;
-    --wb-color-border-default: #525252;
-    --wb-color-border-muted: #3d3d3d;
-    --wb-color-accent-fg: #58a6e7;
-    --wb-color-accent-emphasis: #0078d4;
-    --wb-color-accent-emphasis-hover: #2899f5;
-    --wb-color-accent-muted: rgba(88, 166, 231, 0.45);
-    --wb-color-accent-subtle: rgba(0, 120, 212, 0.18);
+    --wb-color-canvas-default: #161b22;
+    --wb-color-canvas-subtle: #0d1117;
+    --wb-color-canvas-inset: #10151c;
+    --wb-color-fg-default: #e6edf3;
+    --wb-color-fg-muted: #9198a1;
+    --wb-color-border-default: #333b44;
+    --wb-color-border-muted: #232932;
+    --wb-color-accent-fg: #4493f8;
+    --wb-color-accent-emphasis: #1f6feb;
+    --wb-color-accent-emphasis-hover: #316dca;
+    --wb-color-accent-muted: rgba(68, 147, 248, 0.4);
+    --wb-color-accent-subtle: rgba(56, 139, 253, 0.15);
     --wb-color-success-fg: #3fb950;
     --wb-color-success-emphasis: #238636;
     --wb-color-success-emphasis-hover: #1f6f2d;
@@ -126,29 +129,29 @@
     --wb-color-done-muted: rgba(210, 168, 255, 0.4);
     --wb-color-done-subtle: rgba(210, 168, 255, 0.12);
     --wb-color-neutral-emphasis: #6e7681;
-    --wb-color-neutral-subtle: rgba(175, 184, 193, 0.2);
+    --wb-color-neutral-subtle: rgba(110, 118, 129, 0.25);
     --wb-color-danger-muted: rgba(248, 81, 73, 0.4);
     --wb-color-attention-muted: rgba(210, 153, 34, 0.4);
     --wb-color-success-muted: rgba(63, 185, 80, 0.4);
-    --wb-color-avatar-human-bg: #0078d4;
-    --wb-color-avatar-agent-bg: #6264a7;
+    --wb-color-avatar-human-bg: #1f6feb;
+    --wb-color-avatar-agent-bg: #8250df;
     --wb-color-avatar-fg: #ffffff;
-    --wb-color-focus-outline: #58a6e7;
-    --wb-color-active-indicator: #58a6e7;
+    --wb-color-focus-outline: #4493f8;
+    --wb-color-active-indicator: #4493f8;
     --wb-color-nav-active-fg: #f0f0f0;
-    --wb-color-header-bg: #242424;
-    --wb-color-surface-raised: #242424;
-    --wb-color-surface-sunken: #181818;
-    --wb-color-overlay: rgba(0, 0, 0, 0.72);
+    --wb-color-header-bg: #0d1117;
+    --wb-color-surface-raised: #161b22;
+    --wb-color-surface-sunken: #10151c;
+    --wb-color-overlay: rgba(1, 4, 9, 0.72);
     --wb-color-info-fg: #75b8ed;
-    --wb-color-info-subtle: rgba(0, 120, 212, 0.18);
-    --wb-color-info-muted: rgba(88, 166, 231, 0.45);
-    --wb-color-control-hover: #333333;
-    --wb-color-control-active: #3d3d3d;
-    --wb-color-skeleton: #333333;
-    --wb-shadow-small: 0 1px 2px rgba(0, 0, 0, 0.32);
-    --wb-shadow-medium: 0 2px 8px rgba(0, 0, 0, 0.46);
-    --wb-shadow-large: 0 8px 24px rgba(0, 0, 0, 0.58);
+    --wb-color-info-subtle: rgba(56, 139, 253, 0.15);
+    --wb-color-info-muted: rgba(68, 147, 248, 0.45);
+    --wb-color-control-hover: #262c36;
+    --wb-color-control-active: #2d333c;
+    --wb-color-skeleton: #262c36;
+    --wb-shadow-small: 0 1px 2px rgba(1, 4, 9, 0.25);
+    --wb-shadow-medium: 0 3px 8px rgba(1, 4, 9, 0.4);
+    --wb-shadow-large: 0 8px 24px rgba(1, 4, 9, 0.5);
   }
 }
 
@@ -161,18 +164,18 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --wb-color-canvas-default: #1f1f1f;
-  --wb-color-canvas-subtle: #181818;
-  --wb-color-canvas-inset: #141414;
-  --wb-color-fg-default: #f0f0f0;
-  --wb-color-fg-muted: #adadad;
-  --wb-color-border-default: #525252;
-  --wb-color-border-muted: #3d3d3d;
-  --wb-color-accent-fg: #58a6e7;
-  --wb-color-accent-emphasis: #0078d4;
-  --wb-color-accent-emphasis-hover: #2899f5;
-  --wb-color-accent-muted: rgba(88, 166, 231, 0.45);
-  --wb-color-accent-subtle: rgba(0, 120, 212, 0.18);
+  --wb-color-canvas-default: #161b22;
+  --wb-color-canvas-subtle: #0d1117;
+  --wb-color-canvas-inset: #10151c;
+  --wb-color-fg-default: #e6edf3;
+  --wb-color-fg-muted: #9198a1;
+  --wb-color-border-default: #333b44;
+  --wb-color-border-muted: #232932;
+  --wb-color-accent-fg: #4493f8;
+  --wb-color-accent-emphasis: #1f6feb;
+  --wb-color-accent-emphasis-hover: #316dca;
+  --wb-color-accent-muted: rgba(68, 147, 248, 0.4);
+  --wb-color-accent-subtle: rgba(56, 139, 253, 0.15);
   --wb-color-success-fg: #3fb950;
   --wb-color-success-emphasis: #238636;
   --wb-color-success-emphasis-hover: #1f6f2d;
@@ -186,27 +189,27 @@
   --wb-color-done-muted: rgba(210, 168, 255, 0.4);
   --wb-color-done-subtle: rgba(210, 168, 255, 0.12);
   --wb-color-neutral-emphasis: #6e7681;
-  --wb-color-neutral-subtle: rgba(175, 184, 193, 0.2);
+  --wb-color-neutral-subtle: rgba(110, 118, 129, 0.25);
   --wb-color-danger-muted: rgba(248, 81, 73, 0.4);
   --wb-color-attention-muted: rgba(210, 153, 34, 0.4);
   --wb-color-success-muted: rgba(63, 185, 80, 0.4);
-  --wb-color-avatar-human-bg: #0078d4;
-  --wb-color-avatar-agent-bg: #6264a7;
+  --wb-color-avatar-human-bg: #1f6feb;
+  --wb-color-avatar-agent-bg: #8250df;
   --wb-color-avatar-fg: #ffffff;
-  --wb-color-focus-outline: #58a6e7;
-  --wb-color-active-indicator: #58a6e7;
+  --wb-color-focus-outline: #4493f8;
+  --wb-color-active-indicator: #4493f8;
   --wb-color-nav-active-fg: #f0f0f0;
-  --wb-color-header-bg: #242424;
-  --wb-color-surface-raised: #242424;
-  --wb-color-surface-sunken: #181818;
-  --wb-color-overlay: rgba(0, 0, 0, 0.72);
+  --wb-color-header-bg: #0d1117;
+  --wb-color-surface-raised: #161b22;
+  --wb-color-surface-sunken: #10151c;
+  --wb-color-overlay: rgba(1, 4, 9, 0.72);
   --wb-color-info-fg: #75b8ed;
-  --wb-color-info-subtle: rgba(0, 120, 212, 0.18);
-  --wb-color-info-muted: rgba(88, 166, 231, 0.45);
-  --wb-color-control-hover: #333333;
-  --wb-color-control-active: #3d3d3d;
-  --wb-color-skeleton: #333333;
-  --wb-shadow-small: 0 1px 2px rgba(0, 0, 0, 0.32);
-  --wb-shadow-medium: 0 2px 8px rgba(0, 0, 0, 0.46);
-  --wb-shadow-large: 0 8px 24px rgba(0, 0, 0, 0.58);
+  --wb-color-info-subtle: rgba(56, 139, 253, 0.15);
+  --wb-color-info-muted: rgba(68, 147, 248, 0.45);
+  --wb-color-control-hover: #262c36;
+  --wb-color-control-active: #2d333c;
+  --wb-color-skeleton: #262c36;
+  --wb-shadow-small: 0 1px 2px rgba(1, 4, 9, 0.25);
+  --wb-shadow-medium: 0 3px 8px rgba(1, 4, 9, 0.4);
+  --wb-shadow-large: 0 8px 24px rgba(1, 4, 9, 0.5);
 }

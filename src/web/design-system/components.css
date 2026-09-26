@@ -6,23 +6,27 @@ button,
   border: 1px solid var(--wb-color-border-default);
   border-radius: var(--wb-radius-small);
   background: var(--wb-color-surface-raised);
-  box-shadow: none;
+  box-shadow: var(--wb-shadow-small);
   color: var(--wb-color-fg-default);
-  font-weight: var(--wb-font-weight-semibold);
+  font-weight: var(--wb-font-weight-medium);
   cursor: pointer;
+  touch-action: manipulation;
   transition: background-color var(--wb-duration-fast) var(--wb-ease-standard), border-color var(--wb-duration-fast) var(--wb-ease-standard), box-shadow var(--wb-duration-fast) var(--wb-ease-standard);
 }
 button:hover,
-.wb-button:hover { background: var(--wb-color-control-hover); border-color: var(--wb-color-fg-muted); }
+.wb-button:hover { background: var(--wb-color-control-hover); border-color: var(--wb-color-border-default); }
 button:active,
-.wb-button:active { background: var(--wb-color-control-active); box-shadow: var(--wb-shadow-inset); }
+.wb-button:active { background: var(--wb-color-control-active); box-shadow: none; }
 /* Primary is the accent action. It deliberately does not use the success
    colour: "Sign in" and "Post comment" are not success states, and painting
    them green misread as "already done". */
-button.primary { color: var(--wb-color-fg-on-emphasis); background: var(--wb-color-accent-emphasis); border-color: var(--wb-color-accent-emphasis); }
-button.primary:hover { background: var(--wb-color-accent-emphasis-hover); border-color: var(--wb-color-accent-emphasis-hover); }
-button.danger { color: var(--wb-color-danger-fg); background: var(--wb-color-surface-raised); }
-button.danger:hover { color: var(--wb-color-fg-on-emphasis); background: var(--wb-color-danger-emphasis); border-color: var(--wb-color-danger-emphasis); }
+button.primary { color: var(--wb-color-fg-on-emphasis); background: var(--wb-color-accent-emphasis); border-color: transparent; box-shadow: none; }
+button.primary:hover { background: var(--wb-color-accent-emphasis-hover); border-color: transparent; }
+/* Destructive actions stay quiet until intent is shown: the ghost reads as
+   text, and only the hover/press fills with the danger colour. The irreversible
+   step itself is guarded by the confirmation in the calling view. */
+button.danger { color: var(--wb-color-danger-fg); background: transparent; border-color: transparent; box-shadow: none; }
+button.danger:hover:not(:disabled) { color: var(--wb-color-fg-on-emphasis); background: var(--wb-color-danger-emphasis); border-color: transparent; }
 button.button-invisible { border-color: transparent; background: transparent; box-shadow: none; color: var(--wb-color-fg-muted); }
 button.button-invisible:hover { border-color: transparent; background: var(--wb-color-control-hover); color: var(--wb-color-fg-default); }
 button:disabled { opacity: .55; cursor: not-allowed; }
@@ -45,7 +49,8 @@ textarea {
   border: 1px solid var(--wb-color-border-default);
   border-radius: var(--wb-radius-small);
   background: var(--wb-color-surface-raised);
-  box-shadow: var(--wb-shadow-inset);
+  box-shadow: none;
+  touch-action: manipulation;
   transition: border-color var(--wb-duration-fast) var(--wb-ease-standard), box-shadow var(--wb-duration-fast) var(--wb-ease-standard);
 }
 input[type="checkbox"],
@@ -65,24 +70,28 @@ a:focus-visible {
 
 .card,
 .wb-panel {
-  border: 1px solid var(--wb-color-border-default);
+  border: 1px solid var(--wb-color-border-muted);
   border-radius: var(--wb-radius-medium);
   background: var(--wb-color-surface-raised);
-  box-shadow: none;
+  box-shadow: var(--wb-shadow-small);
 }
 
+/* Chips carry a state or a tag, not an action: they are quiet tinted pills,
+   never bordered boxes. Colour comes from the tint + text pair (readable
+   without the border), and every variant below consumes a semantic token. */
 .chip {
   display: inline-flex;
   align-items: center;
-  min-height: 1.5rem;
+  gap: 4px;
+  min-height: 1.25rem;
   padding: 0 var(--wb-space-2);
-  border: 1px solid var(--wb-color-border-default);
-  border-radius: var(--wb-radius-small);
+  border: 0;
+  border-radius: var(--wb-radius-pill);
   color: var(--wb-color-fg-muted);
-  background: var(--wb-color-canvas-subtle);
+  background: var(--wb-color-neutral-subtle);
   font-size: var(--wb-font-size-xs);
   font-weight: var(--wb-font-weight-medium);
-  line-height: 1;
+  line-height: 1.1;
   white-space: nowrap;
 }
 

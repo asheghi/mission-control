@@ -3,13 +3,14 @@
 @import "./design-system/components.css";
 
 .skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; padding: 6px 10px; border-radius: var(--wb-radius-medium); background: var(--wb-color-accent-emphasis); color: var(--wb-color-fg-on-emphasis); font-weight: 600; transform: translateY(-150%); }
-.skip-link:focus { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; transform: translateY(0); }
+.skip-link:focus-visible, .skip-link:focus { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; transform: translateY(0); }
 html { min-width: 0; }
 body {
   margin: 0;
-  background: var(--wb-color-canvas-default);
+  background: var(--wb-color-canvas-subtle);
   color: var(--wb-color-fg-default);
   font: var(--wb-font-size-default)/var(--wb-line-height-default) var(--wb-font-family-sans);
+  -webkit-tap-highlight-color: transparent;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 .app { min-height: 100vh; display: flex; flex-direction: column; }
@@ -17,7 +18,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   position: sticky; top: 0; z-index: 40;
   display: flex; align-items: center; gap: var(--wb-space-5);
   min-height: var(--wb-layout-header-height); padding: 0 var(--wb-space-5);
-  border-bottom: 1px solid var(--wb-color-border-default);
+  border-bottom: 1px solid var(--wb-color-border-muted);
   background: var(--wb-color-header-bg);
 }
 .brand { display: inline-flex; align-items: center; gap: 8px; color: var(--wb-color-fg-default); text-decoration: none; font-size: 15px; font-weight: 600; white-space: nowrap; }
@@ -29,7 +30,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .topbar nav { display: flex; align-self: stretch; gap: 1px; flex: 1; }
 .topbar nav a { position: relative; display: flex; align-items: center; padding: 0 12px; color: var(--wb-color-fg-muted); text-decoration: none; font-weight: 500; transition: color var(--wb-duration-fast) var(--wb-ease-standard), background-color var(--wb-duration-fast) var(--wb-ease-standard); }
 .topbar nav a:hover { color: var(--wb-color-fg-default); background: var(--wb-color-control-hover); }
-.topbar nav a.active { color: var(--wb-color-nav-active-fg); background: var(--wb-color-accent-subtle); }
+.topbar nav a.active { color: var(--wb-color-nav-active-fg); }
 .topbar nav a.active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--wb-color-active-indicator); }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 .theme-toggle { width: 2rem; min-width: 2rem; min-height: 2rem; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-color: var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-surface-raised); color: var(--wb-color-fg-muted); touch-action: manipulation; }
@@ -47,7 +48,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #content { scroll-margin-top: calc(var(--wb-layout-header-height) + var(--wb-space-2)); }
 main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); margin: 0 auto; padding: 20px 24px 40px; }
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin: 0 0 16px; }
-.page-header h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; }
+.page-header h1 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
 .page-header p { margin: 4px 0 0; color: var(--wb-color-fg-muted); }
 .keyboard-hint { color: var(--wb-color-fg-muted); font-size: 12px; }
 .board-status.hint { margin: calc(var(--wb-space-2) * -1) 0 var(--wb-space-2); color: var(--wb-color-fg-muted); font-size: 12px; }
@@ -72,9 +73,12 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .board-card-title:focus-visible { border-radius: 2px; outline: 3px solid var(--wb-color-focus-outline); outline-offset: 2px; }
 .board-card-bottom { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .board-card-refs, .board-card-people { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.comment-chip { font-variant-numeric: tabular-nums; }
+.board-card-refs { flex: 1 1 auto; }
+/* The comment count is reference metadata, not a tag: it renders as plain
+   muted text beside the item number instead of a third chip in the row. */
+.comment-chip { background: transparent; padding: 0; color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); font-variant-numeric: tabular-nums; }
 .comment-chip.empty { display: none; }
-.chip.agent-chip { color: var(--wb-color-done-fg); border-color: var(--wb-color-done-muted); background: var(--wb-color-done-subtle); text-transform: lowercase; }
+.chip.agent-chip { min-height: 1.125rem; padding: 0 6px; color: var(--wb-color-done-fg); background: var(--wb-color-done-subtle); text-transform: lowercase; }
 /* Priority reads as an ordinal heat ramp: warm colours for the two urgent
    levels, then stepping down through neutral emphasis. P3 deliberately does not
    use the success colour — green already means "Done" on this board, so a
@@ -94,7 +98,7 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
    --wb-* token. A type this build does not recognise gets the neutral chip and
    reads "Unknown" instead of rendering as an unlabelled blank. */
 .type-chip { gap: 4px; }
-.type-mark { display: inline-flex; align-items: center; justify-content: center; width: 1rem; height: 1rem; border-radius: var(--wb-radius-small); background: var(--wb-color-neutral-subtle); color: var(--wb-color-fg-default); font-size: 10px; font-weight: var(--wb-font-weight-semibold); line-height: 1; }
+.type-mark { display: inline-flex; align-items: center; justify-content: center; width: .875rem; height: .875rem; border-radius: 4px; background: var(--wb-color-neutral-subtle); color: var(--wb-color-fg-default); font-size: 9px; font-weight: var(--wb-font-weight-semibold); line-height: 1; }
 .type-feature { color: var(--wb-color-accent-fg); border-color: var(--wb-color-accent-muted); background: var(--wb-color-accent-subtle); }
 .type-user_story { color: var(--wb-color-info-fg); border-color: var(--wb-color-info-muted); background: var(--wb-color-info-subtle); }
 .type-bug { color: var(--wb-color-danger-fg); border-color: var(--wb-color-danger-muted); background: var(--wb-color-danger-subtle); }
@@ -152,11 +156,11 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .detail-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--wb-color-border-muted); padding-bottom: 12px; }
 .detail-title-area { min-width: 0; flex: 1; display: flex; align-items: center; gap: 8px; margin: 0; flex-wrap: wrap; }
 .detail-page-title { width: 100%; margin: 0; font-size: 18px; line-height: 1.25; }
-.detail-title-input { min-width: 10rem; flex: 1 1 16rem; margin: -5px -8px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; color: var(--wb-color-fg-default); font-size: 26px; line-height: 1.25; font-weight: 600; }
+.detail-title-input { min-width: 10rem; flex: 1 1 16rem; margin: -5px -8px; padding: 4px 8px; border-color: transparent; background: transparent; box-shadow: none; color: var(--wb-color-fg-default); font-size: 24px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
 .detail-title-input:hover { border-color: var(--wb-color-border-default); }
 .detail-title-input[aria-invalid="true"] { border-color: var(--wb-color-danger-muted); }
 .detail-save-state { min-width: 64px; color: var(--wb-color-fg-muted); font-size: 12px; text-align: right; }
-.detail-meta { margin-top: -10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.detail-meta { margin-top: -10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .detail-controls { display: flex; gap: 16px; flex-wrap: wrap; padding: 16px; background: var(--wb-color-canvas-subtle); }
 .card.detail-body, .composer, .comment, .detail-history { padding: 16px; }
 .detail-controls label { min-width: 150px; display: flex; flex-direction: column; gap: 5px; color: var(--wb-color-fg-muted); font-size: 12px; font-weight: 500; }
@@ -234,7 +238,7 @@ main.content { padding-top: var(--wb-space-5); }
 .auth-shell { width: min(100%, 27rem); margin: 10vh auto 0; }
 .auth-header { display: flex; align-items: center; justify-content: space-between; gap: var(--wb-space-3); margin-bottom: var(--wb-space-5); }
 .auth-brand { display: flex; align-items: center; justify-content: center; gap: var(--wb-space-2); margin-bottom: 0; font-size: var(--wb-font-size-lg); font-weight: var(--wb-font-weight-semibold); }
-.login { width: 100%; max-width: none; margin: 0; padding: var(--wb-space-6); gap: var(--wb-space-3); border-top: 3px solid var(--wb-color-accent-emphasis); box-shadow: var(--wb-shadow-small); }
+.login { width: 100%; max-width: none; margin: 0; padding: var(--wb-space-6); gap: var(--wb-space-3); border-top: 2px solid var(--wb-color-accent-emphasis); box-shadow: var(--wb-shadow-small); }
 .login::before { display: none; }
 .login-heading { margin-bottom: var(--wb-space-2); }
 .login-heading h1 { margin: var(--wb-space-1) 0; text-align: left; font-size: var(--wb-font-size-xl); }
@@ -246,35 +250,64 @@ main.content { padding-top: var(--wb-space-5); }
 
 .board { gap: var(--wb-space-3); }
 .board-column {
-  min-height: 28rem;
+  min-height: 18rem;
   padding: var(--wb-space-2);
-  border: 1px solid var(--wb-color-border-default);
-  border-top: 2px solid var(--wb-color-neutral-emphasis);
+  border: 1px solid var(--wb-color-border-muted);
   border-radius: var(--wb-radius-medium);
   background: var(--wb-color-surface-sunken);
   scroll-margin-inline: var(--wb-space-3);
 }
-.board-column[data-status="doing"] { border-top-color: var(--wb-color-accent-fg); }
-.board-column[data-status="blocked"] { border-top-color: var(--wb-color-attention-fg); }
-.board-column[data-status="done"] { border-top-color: var(--wb-color-success-fg); }
+/* Column identity reads from a status dot beside the title, not a thick
+   painted border: the lane is quiet chrome, the card is the content. */
+.board-column-title::before { content: ""; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--wb-color-neutral-emphasis); }
+.board-column[data-status="doing"] .board-column-title::before { background: var(--wb-color-accent-fg); }
+.board-column[data-status="blocked"] .board-column-title::before { background: var(--wb-color-attention-fg); }
+.board-column[data-status="done"] .board-column-title::before { background: var(--wb-color-success-fg); }
 .board-column-title { margin: var(--wb-space-1) var(--wb-space-1) var(--wb-space-2); font-size: var(--wb-font-size-sm); letter-spacing: .01em; }
-.board-column-title .count { margin-left: auto; }
+.board-column-title .count { margin-left: auto; font-variant-numeric: tabular-nums; }
 .board-cards { gap: var(--wb-space-2); }
-.board-card { gap: var(--wb-space-2); padding: var(--wb-space-3); border-radius: var(--wb-radius-small); box-shadow: none; }
-.board-card:hover { border-color: var(--wb-color-accent-fg); box-shadow: var(--wb-shadow-small); transform: none; }
-.board-card select { min-height: 2.25rem; color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); }
-.board-column-empty { padding: var(--wb-space-8) var(--wb-space-3); border: 1px dashed var(--wb-color-border-default); border-radius: var(--wb-radius-medium); color: var(--wb-color-fg-muted); text-align: center; }
+.board-card { gap: var(--wb-space-2); padding: var(--wb-space-3); border: 1px solid var(--wb-color-border-muted); border-radius: var(--wb-radius-medium); box-shadow: var(--wb-shadow-small); }
+.board-card:hover { border-color: var(--wb-color-border-default); box-shadow: var(--wb-shadow-medium); transform: none; }
+/* The per-card status control is the keyboard path for moving work, but it
+   must not read as a form field bolted under every card. It renders as a
+   ghost: borderless until hovered, tinted in the column's own status colour,
+   sized to its longest option instead of stretching full width. */
+.board-card select {
+  width: auto; max-width: 100%;
+  min-height: 1.75rem;
+  margin-top: -2px; padding: 0 var(--wb-space-1) 0 var(--wb-space-2);
+  border: 1px solid transparent; border-radius: var(--wb-radius-small);
+  background: transparent; box-shadow: none;
+  color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); font-weight: var(--wb-font-weight-medium);
+}
+.board-card select:hover { border-color: var(--wb-color-border-default); background: var(--wb-color-canvas-subtle); }
+.board-card[data-status="doing"] select { color: var(--wb-color-accent-fg); }
+.board-card[data-status="blocked"] select { color: var(--wb-color-attention-fg); }
+.board-card[data-status="done"] select { color: var(--wb-color-success-fg); }
+.board-column-empty { padding: var(--wb-space-6) var(--wb-space-3); border: 1px dashed var(--wb-color-border-muted); border-radius: var(--wb-radius-medium); color: var(--wb-color-fg-muted); text-align: center; }
 .board-card-skeleton { cursor: default; }
 .skeleton-chip { width: 4rem; height: 1.25rem; border-radius: var(--wb-radius-pill); }
 .skeleton-line { width: 90%; height: .9rem; border-radius: var(--wb-radius-small); }
 .skeleton-line-short { width: 55%; }
 .quick-add { align-items: center; }
 .quick-add input { min-height: var(--wb-control-medium); }
+/* The per-column submit is a quiet text action beside the ghost input, not a
+   third bordered button in the lane. */
+.quick-add button { flex: 0 0 auto; border: 0; background: transparent; box-shadow: none; color: var(--wb-color-accent-fg); }
+.quick-add button:hover:not(:disabled) { background: var(--wb-color-control-hover); color: var(--wb-color-accent-fg); }
 
-.list-toolbar { padding: var(--wb-space-3); border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-surface-raised); box-shadow: none; }
-.list-toolbar legend { width: 100%; margin: 0 0 var(--wb-space-2); padding: 0; color: var(--wb-color-fg-default); font-size: var(--wb-font-size-sm); }
+/* Filters are one quiet row, not a panel: each control names itself with its
+   own first option ("All statuses"), so no visible per-field labels and no
+   bordered toolbar box. */
+.list-toolbar { align-items: center; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.list-toolbar legend { width: 100%; margin: 0 0 var(--wb-space-2); padding: 0; color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); font-weight: var(--wb-font-weight-medium); }
+.list-toolbar label { min-width: 0; flex: 0 1 auto; }
+.list-toolbar .list-search-label { flex: 1 1 15rem; max-width: 22rem; }
+.list-toolbar select, .list-toolbar .search-field { border-color: transparent; background: var(--wb-color-canvas-inset); box-shadow: none; }
+.list-toolbar select:hover, .list-toolbar select:focus-visible,
+.list-toolbar .search-field:hover, .list-toolbar .search-field:focus-visible { border-color: var(--wb-color-border-default); background: var(--wb-color-surface-raised); }
 .list-notice { color: var(--wb-color-info-fg); font-size: var(--wb-font-size-sm); }
-.list-table-scroller { border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-surface-raised); box-shadow: none; }
+.list-table-scroller { border: 1px solid var(--wb-color-border-muted); border-radius: var(--wb-radius-medium); background: var(--wb-color-surface-raised); box-shadow: var(--wb-shadow-small); }
 /* Sticky is scoped to the table's own scroll container, so the offset must be
    zero. Anchoring it to the header height instead displaced the header downward
    and painted it over the first row, hiding that item from sighted users. */
@@ -299,10 +332,12 @@ main.content { padding-top: var(--wb-space-5); }
 .list-footer { justify-content: space-between; }
 
 .detail { max-width: 76rem; gap: var(--wb-space-4); }
-.detail-head { padding: var(--wb-space-4) 0 var(--wb-space-5); }
-.detail-title-input { font-size: var(--wb-font-size-2xl); letter-spacing: -.02em; }
+.breadcrumb { color: var(--wb-color-fg-muted); }
+.breadcrumb:hover { color: var(--wb-color-accent-fg); }
+.detail-head { padding: 0 0 var(--wb-space-4); }
+.detail-page-title { width: 100%; margin: 0; color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); font-weight: var(--wb-font-weight-semibold); letter-spacing: .02em; }
 .detail-notice { margin-top: 0; }
-.detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem); grid-template-areas: "body relationships" "body fields" "composer labels" "comments history"; align-items: stretch; gap: var(--wb-space-4); }
+.detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem); grid-template-areas: "body relationships" "body fields" "composer labels" "comments history"; align-items: start; gap: var(--wb-space-4); }
 .detail-layout > .detail-body { grid-area: body; }
 .detail-layout > .detail-relationships { grid-area: relationships; }
 .detail-layout > .composer { grid-area: composer; }
@@ -310,8 +345,8 @@ main.content { padding-top: var(--wb-space-5); }
 .detail-layout > .detail-controls { grid-area: fields; }
 .detail-layout > .detail-labels { grid-area: labels; }
 .detail-layout > .detail-history { grid-area: history; min-width: 0; }
-.card.detail-body, .composer, .comment, .detail-history, .detail-labels, .detail-controls { padding: var(--wb-space-4); }
-.detail-controls { display: grid; gap: var(--wb-space-3); border: 1px solid var(--wb-color-border-default); background: var(--wb-color-surface-raised); }
+.card.detail-body, .composer, .comment, .detail-history, .detail-labels, .detail-controls { padding: var(--wb-space-3); }
+.detail-controls { display: grid; gap: var(--wb-space-3); border: 1px solid var(--wb-color-border-muted); background: var(--wb-color-surface-raised); }
 .detail-controls label { min-width: 0; }
 .detail-controls select { width: 100%; }
 .detail-labels { gap: var(--wb-space-3); }
@@ -321,23 +356,28 @@ main.content { padding-top: var(--wb-space-5); }
 .comment { margin-bottom: var(--wb-space-3); }
 
 .backlog-view { width: 100%; min-width: 0; }
-.backlog-add { display: grid; gap: var(--wb-space-2); margin-bottom: var(--wb-space-5); padding: var(--wb-space-4); }
-.backlog-add > label { font-weight: var(--wb-font-weight-semibold); }
+/* The add form is a toolbar, not a card: creating an item is a frequent,
+   primary action, so it sits directly on the canvas above the table instead of
+   inside another bordered box. */
+.backlog-add { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-space-2); margin-bottom: var(--wb-space-4); padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.backlog-add > label { flex-basis: 100%; font-weight: var(--wb-font-weight-semibold); }
 .backlog-add > div, .relationship-form > div { display: flex; gap: var(--wb-space-2); }
 /* The base `input` rule is `width: 100%`, which inside this flex row made the
    input claim the whole line and squeeze the submit button until its label
    wrapped onto two lines. The input flexes instead; the button keeps its own
    width. */
 .backlog-add input { width: auto; min-width: 0; flex: 1 1 12rem; }
+.backlog-add select { width: auto; flex: 0 0 auto; color: var(--wb-color-fg-muted); }
 .backlog-add button { flex: 0 0 auto; white-space: nowrap; }
+.backlog-add .backlog-add-hint { flex-basis: 100%; }
 /* The table surface is the canvas, not `surface-raised`: in the dark theme
    `--wb-color-surface-raised` and `--wb-color-canvas-subtle` are the same
    #161b22, so a raised surface made every row hover invisible. On the canvas
    the hover, the nested tint, and the empty-row override are all real. */
-.backlog-table-scroller { width: 100%; max-width: 100%; overflow-x: auto; border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-canvas-default); box-shadow: none; }
+.backlog-table-scroller { width: 100%; max-width: 100%; overflow-x: auto; border: 1px solid var(--wb-color-border-muted); border-radius: var(--wb-radius-medium); background: var(--wb-color-canvas-default); box-shadow: var(--wb-shadow-small); }
 .backlog-table-scroller:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
 .backlog-table { width: 100%; min-width: 720px; border-collapse: collapse; }
-.backlog-table th, .backlog-table td { padding: var(--wb-space-3) var(--wb-space-4); border-bottom: 1px solid var(--wb-color-border-muted); text-align: left; vertical-align: middle; }
+.backlog-table th, .backlog-table td { padding: var(--wb-space-2) var(--wb-space-3); border-bottom: 1px solid var(--wb-color-border-muted); text-align: left; vertical-align: middle; }
 .backlog-table th { color: var(--wb-color-fg-muted); background: var(--wb-color-canvas-subtle); font-size: var(--wb-font-size-xs); font-weight: var(--wb-font-weight-semibold); }
 .backlog-table th:not(:first-child) { width: 9rem; }
 .backlog-table tbody tr:last-child td { border-bottom: 0; }
@@ -387,8 +427,18 @@ main.content { padding-top: var(--wb-space-5); }
 .backlog-drag-handle:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
 .backlog-drag-handle:active { cursor: grabbing; }
 .backlog-move-controls { display: flex; align-items: center; gap: var(--wb-space-1); }
-.backlog-move-button { min-height: 1.75rem; min-width: 1.75rem; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-small); background: var(--wb-color-canvas-default); color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); line-height: 1; }
-.backlog-move-button:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--wb-color-fg-default); border-color: var(--wb-color-accent-fg); background: var(--wb-color-control-hover); }
+/* Row actions reveal on hover or keyboard focus and stay permanently visible
+   on touch layouts, where there is no hover to reveal them. The control itself
+   remains focusable at all times — only its paint is deferred — so the tab
+   order and the screen-reader experience never depend on the pointer. */
+.backlog-move-controls { opacity: 0; transition: opacity var(--wb-duration-fast) var(--wb-ease-standard); }
+.backlog-table tr:hover .backlog-move-controls,
+.backlog-table tr:focus-within .backlog-move-controls { opacity: 1; }
+@media (hover: none) {
+  .backlog-move-controls { opacity: 1; }
+}
+.backlog-move-button { min-height: 1.75rem; min-width: 1.75rem; padding: 0; display: inline-grid; place-items: center; border: 0; border-radius: var(--wb-radius-small); background: transparent; color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); line-height: 1; }
+.backlog-move-button:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--wb-color-accent-fg); background: var(--wb-color-control-hover); }
 /* Two ways a move control reads as unavailable, and they are not the same
    thing. `:disabled` is transient (a write is in flight). `[aria-disabled]` is
    structural (this row simply has no previous sibling) and the control STAYS
@@ -438,7 +488,8 @@ main.content { padding-top: var(--wb-space-5); }
    the row wraps, sits on its own line at the start of it. */
 .relationship-remove { flex: 0 0 auto; }
 .relationship-form { display: grid; gap: var(--wb-space-1); color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); }
-.relationship-form input { min-width: 0; }
+.relationship-form input { min-width: 0; width: auto; flex: 1 1 6rem; }
+.relationship-form button { flex: 0 0 auto; white-space: nowrap; }
 .relationship-add { margin-top: var(--wb-space-1); }
 
 @media (min-width: 1440px) {

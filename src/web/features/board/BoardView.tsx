@@ -60,7 +60,7 @@ export function BoardView(props: BoardViewProps) {
       </div>
 
       {board.error !== "" ? (
-        <div class="error-banner">
+        <div class="error-banner" role="alert">
           {board.error} <button type="button" onClick={board.refresh}>Retry</button>
         </div>
       ) : null}

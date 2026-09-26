@@ -371,7 +371,7 @@ export function BacklogView(props: BacklogViewProps) {
       )}
 
       <form
-        class="backlog-add card"
+        class="backlog-add"
         aria-busy={backlog.adding}
         onSubmit={(event) => {
           event.preventDefault();
@@ -380,7 +380,7 @@ export function BacklogView(props: BacklogViewProps) {
           setDraft("");
         }}
       >
-        <label for="backlog-add-title">Add backlog item</label>
+        <label for="backlog-add-title" class="sr-only">Add backlog item</label>
         <div>
           <select
             id="backlog-add-type"
@@ -408,7 +408,7 @@ export function BacklogView(props: BacklogViewProps) {
             disabled={backlog.adding}
             onInput={(event) => setDraft(event.currentTarget.value)}
           />
-          <button class="primary" type="submit" aria-label="Add backlog item" disabled={backlog.adding || draft.trim() === ""}>
+          <button class="primary" type="submit" disabled={backlog.adding || draft.trim() === ""}>
             {backlog.adding ? "Adding\u2026" : "Add item"}
           </button>
         </div>
@@ -465,9 +465,6 @@ export function BacklogView(props: BacklogViewProps) {
           </tbody>
         </table>
       </div>
-      <p class="backlog-root-note muted">
-        Tasks always live inside a parent item. Dropping a Task at the top level is refused, and the reason is announced.
-      </p>
     </div>
   );
 }

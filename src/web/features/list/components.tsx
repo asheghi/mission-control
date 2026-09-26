@@ -54,10 +54,9 @@ interface FilterBarProps {
 export function FilterBar({ list }: FilterBarProps) {
   const active = Object.values(list.filters).some((value) => value !== "") || list.searchDraft.trim() !== "";
   return (
-    <fieldset class="list-toolbar">
-      <legend>Filter work items</legend>
+    <fieldset class="list-toolbar" aria-label="Filter work items">
       <label>
-        <span>Status</span>
+        <span class="sr-only">Status</span>
         <select
           name="status"
           autoComplete="off"
@@ -73,7 +72,7 @@ export function FilterBar({ list }: FilterBarProps) {
         </select>
       </label>
       <label>
-        <span>Type</span>
+        <span class="sr-only">Type</span>
         <select
           name="type"
           autoComplete="off"
@@ -90,7 +89,7 @@ export function FilterBar({ list }: FilterBarProps) {
         </select>
       </label>
       <label>
-        <span>Assignee</span>
+        <span class="sr-only">Assignee</span>
         <select
           name="assignee"
           autoComplete="off"
@@ -108,7 +107,7 @@ export function FilterBar({ list }: FilterBarProps) {
         </select>
       </label>
       <label>
-        <span>Label</span>
+        <span class="sr-only">Label</span>
         <select
           name="label"
           autoComplete="off"
@@ -121,7 +120,7 @@ export function FilterBar({ list }: FilterBarProps) {
         </select>
       </label>
       <label class="list-search-label">
-        <span>Search titles</span>
+        <span class="sr-only">Search titles</span>
         <input
           type="search"
           name="title-search"

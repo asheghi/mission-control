@@ -84,6 +84,17 @@ export function WorkItemCard({ item, onMove, onDragStart, onDragEnd, dragging, m
             {count === 0 ? "" : commentLabel}
           </span>
         </span>
+        <select
+          aria-label={`Move #${item.id} to status`}
+          value={item.status}
+          data-focus-target="status"
+          onChange={(event) => {
+            const status: unknown = event.currentTarget.value;
+            if (isWorkStatus(status) && status !== item.status) onMove(item.id, status, "status");
+          }}
+        >
+          {BOARD_STATUSES.map((status) => <option value={status} key={status}>{BOARD_COLUMN_LABELS[status]}</option>)}
+        </select>
         <span class="board-card-people">
           {item.assignee?.kind === "agent" ? <span class="chip agent-chip" aria-hidden="true">agent</span> : null}
           {item.assignee !== null ? (
@@ -97,17 +108,6 @@ export function WorkItemCard({ item, onMove, onDragStart, onDragEnd, dragging, m
           ) : null}
         </span>
       </div>
-      <select
-        aria-label={`Move #${item.id} to status`}
-        value={item.status}
-        data-focus-target="status"
-        onChange={(event) => {
-          const status: unknown = event.currentTarget.value;
-          if (isWorkStatus(status) && status !== item.status) onMove(item.id, status, "status");
-        }}
-      >
-        {BOARD_STATUSES.map((status) => <option value={status} key={status}>{BOARD_COLUMN_LABELS[status]}</option>)}
-      </select>
     </article>
   );
 }
