@@ -38,10 +38,13 @@ interface Options {
   readonly host: string;
   readonly port: number;
   readonly route: string;
+  /** Fill the board with development data before serving. */
+  readonly seed: boolean;
 }
 
 function parseOptions(argv: readonly string[]): Options {
   const flags = new Map<string, string>();
+  const switches = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === undefined || !token.startsWith("--")) continue;
@@ -49,6 +52,8 @@ function parseOptions(argv: readonly string[]): Options {
     if (next !== undefined && !next.startsWith("--")) {
       flags.set(token.slice(2), next);
       index += 1;
+    } else {
+      switches.add(token.slice(2));
     }
   }
   const port = Number(flags.get("port") ?? process.env.WORKBOARD_PORT ?? 8765);
@@ -65,6 +70,7 @@ function parseOptions(argv: readonly string[]): Options {
     host: flags.get("host") ?? "127.0.0.1",
     port,
     route: flags.get("route") ?? "#/backlog",
+    seed: switches.has("seed") || flags.has("seed"),
   };
 }
 
@@ -104,7 +110,16 @@ async function main(): Promise<void> {
     await workboard([...dataArgs, "participant", "add", "--name", options.participant, "--kind", "human"]);
   }
 
-  // 3. Issue a token for that participant.
+  // 3. Optional development data. `--seed` is explicit opt-in and always
+  //    replaces what is there, because a board you have been working in is not
+  //    something a demo seed should quietly merge into.
+  if (options.seed) {
+    const seeded = await workboard([...dataArgs, "seed", "--reset"]);
+    console.log(seeded.trim());
+    console.log("");
+  }
+
+  // 4. Issue a token for that participant.
   const issued = await workboard([
     ...dataArgs,
     "--json",
@@ -139,7 +154,7 @@ async function main(): Promise<void> {
   console.log(`    bun run workboard -- --data ${options.dataDir} token revoke --id <token-id>`);
   console.log("");
 
-  // 4. Serve in the foreground, inheriting stdio so Ctrl-C behaves normally.
+  // 5. Serve in the foreground, inheriting stdio so Ctrl-C behaves normally.
   const server = spawn(
     BUN,
     [ENTRY, "serve", ...dataArgs, "--host", options.host, "--port", String(options.port)],

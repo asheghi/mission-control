@@ -41,6 +41,8 @@ bun run dev:board
 - Before serving, check for a live or stale server with
   `ss -ltnp | grep 8765`. A server already bound to 8765 makes the new bind
   fail with `EADDRINUSE`; `workboard.pid` can point to a dead process.
+- `bun run dev:board -- --seed` fills the board with development data first
+  (see "Development seed" below).
 
 ## Tokens
 
@@ -91,6 +93,26 @@ are the contract — when in doubt, read them.
   `relationship remove <id> <relationship-id>`, `relationship list <id>`,
   `reorder <id> --parent <id|root> [--before <id|end>]`.
 
+## Development seed
+
+`workboard seed` (also `bun run seed`) fills an **empty** board with a fixed
+dataset: five participants, eight labels, ~68 items nested three deep across
+every status, type, and priority, comments with @mentions, and relationships.
+It exists so a developer, a screenshot, and a browser test all look at the
+same board.
+
+- `src/dev/seed-data.ts` is the dataset (data only); `src/dev/seed.ts` is the
+  seeder. The seeder writes through `WorkboardService`, never through
+  repositories, so a seeded board obeys the same invariants as real work.
+- It is deterministic — no clock, no randomness, no environment reads. The
+  only variation between two seeded boards is the `created_at` the service
+  stamps.
+- It refuses a board that already has items unless `--reset` is passed, and
+  `--reset` clears only the work-item graph: participants, labels, and tokens
+  survive.
+- Never point it at `~/.local/share/workboard` or any board with real work.
+  `test/e2e/web-ui.test.ts` uses it to build its fixture board in a temp dir.
+
 ## Data directories: know which board you touch
 
 - The database file is always `workboard.sqlite`, plus a `workboard.pid`
@@ -127,7 +149,9 @@ gates, so run them before calling work done.
   HTTP adapter, auth middleware.
 - `src/auth/`, `src/mcp/` (stdio + the nine tools), `src/cli.ts` (all CLI
   commands), `src/maintenance/` (backup, serve PID lock), `src/observability/`
-  (logger, request log, diagnostics).
+  (logger, request log, diagnostics), `src/dev/` (the development seed —
+  its only caller in `src/` is `src/cli.ts`, which exposes it as the `seed`
+  command).
 - `src/web/` — Preact TSX UI. `main.tsx` is the single browser entry;
   `features/` per view (board, backlog, list, detail); `design-system/` CSS
   tokens; a few plain `.js` modules (`api.js`, `ui-state.js`,
@@ -135,9 +159,15 @@ gates, so run them before calling work done.
   `.generated/web-assets.ts` (generated, gitignored, never edit) and asserts
   exactly one JS + one CSS output; the server bakes that file in, so a
   rebuilt bundle is served only after the server restarts.
-- `test/` — `unit/`, `integration/` (REST, CLI, db, auth), `contract/` (real
-  `@modelcontextprotocol/sdk` clients over HTTP and stdio), `e2e/` (compiled
-  binary), plus `helpers/` and `fixtures/`.
+- `test/` — `unit/`, `integration/` (REST, CLI, db, auth, the seed),
+  `contract/` (real `@modelcontextprotocol/sdk` clients over HTTP and stdio),
+  `e2e/` (the compiled binary, and the web UI in a real browser), plus
+  `helpers/` and `fixtures/`.
+- `test/helpers/browser.ts` — a ~500-line Chrome DevTools Protocol client
+  written on Bun's global `WebSocket`: launch, navigate, evaluate, poll,
+  click/type/select, real key events, and a `problems()` collector (console
+  errors, uncaught exceptions, failed requests, 4xx/5xx). It exists so the
+  browser tests need no new dependency; the project has three on purpose.
 - Docs: `docs/manual.md` (usage guide), `docs/verification.md` (acceptance
   matrix executed at a past HEAD), `docs/plans/` (implementation plans,
   historical), `docs/integration/` (DSH deployment).
@@ -146,9 +176,10 @@ gates, so run them before calling work done.
 
 ```bash
 bun run typecheck    # build:web first, then tsc --noEmit
-bun test             # build:web first, then the whole suite
+bun test             # build:web first, then the whole suite (596 tests)
 bun run build        # compile dist/workboard (single binary)
 bun run test:e2e     # only meaningful after build; skips silently otherwise
+bun run test:e2e:web # the browser suite alone (build:web, no compile needed)
 ```
 
 - `test/e2e` exercises the compiled binary from a clean directory and skips
@@ -156,6 +187,31 @@ bun run test:e2e     # only meaningful after build; skips silently otherwise
   freshly built binary proves nothing.
 - Every `build:web` rewrites `.generated/web-assets.ts`, and the e2e suite
   asserts on the served bytes — rerun the build after UI edits.
+
+### The web UI e2e suite
+
+`test/e2e/web-ui.test.ts` drives a real Chromium against a real server: it
+seeds a temp board, starts `dist/workboard` when it is built and
+`src/entry.ts` otherwise, signs in through a `#token=` link, and then exercises
+sign-in, the backlog (expand/collapse, quick add), the board (moving a card
+between columns), the list (filters, search, pagination), the detail view
+(rename, comment with a mention, history), the live event feed, and sign-out.
+Every test ends by asserting the page reported no console error, failed
+request, or error response.
+
+- It **skips itself** when no Chromium is present. `WORKBOARD_CHROME` points
+  at a binary; otherwise `/usr/bin/chromium`, `/usr/bin/chromium-browser`, and
+  the Google Chrome paths are tried.
+- One page per test (`beforeEach`/`afterEach`). This is not tidiness: each
+  signed-in page holds a long-lived `/api/events` connection, and reusing one
+  page for the whole run piles those connections up until a navigation waits
+  on a free one. That failure looks like a hung page, not a leak.
+- The test clears browser storage with CDP `Storage.clearDataForOrigin` while
+  the page is on `about:blank`. Clearing it from inside a live app races the
+  shell's own boot and produces a 401 the app correctly refuses.
+- The server's stderr is drained for the whole run, not just until its banner
+  is read: it carries a line per request, and an undrained pipe fills up and
+  then blocks the server, which reads as a hung test.
 
 ## Verify UI changes without a desktop browser
 

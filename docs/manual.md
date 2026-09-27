@@ -97,6 +97,15 @@ Sign in by opening the printed `#token=` link — no extra commands needed.
 and `serve --hide-token` suppress token output. Everything below goes
 into more detail.
 
+Want a board with content in it rather than an empty one? Add development
+data (see §5, **seed**):
+
+```bash
+workboard init
+workboard seed                 # ~68 items, 5 participants, labels, comments
+workboard serve --port 8765
+```
+
 ---
 
 ## 4. The human loop (Web UI)
@@ -240,6 +249,29 @@ workboard token create --participant claude --name codex-agent
 workboard token revoke --id 3
 ```
 
+**seed** — fill an **empty** board with development data: participants
+(humans and agents), labels, a hierarchy of features, stories, bugs and
+tasks across every status, comments with @mentions, and relationships.
+It is for development and demos, not for a real board.
+
+```bash
+workboard seed                 # an empty board; refuses otherwise
+workboard seed --reset         # replace the work items on any board
+workboard --json seed          # summary + the id of every seeded item
+bun run seed -- --dir ./scratch   # same thing, pointed somewhere disposable
+```
+
+- **Refuses a board that already has work** unless `--reset` is passed, so a
+  mistyped `--dir` cannot quietly append demo items to a real board.
+- `--reset` deletes the work-item graph only (items, comments, mentions,
+  item labels, history, links). Participants, labels, and API tokens survive,
+  so it does not sign you out.
+- The data is fixed and deterministic — no randomness, no dates — so the
+  same seed always produces the same board.
+- Everything is written through the normal service layer, so a seeded board
+  obeys the same rules as real work (a task always has a parent, labels
+  exist before use, a done item is closed).
+
 **backup / restore / doctor** — see §9.
 
 ### Machine-readable output
@@ -372,6 +404,7 @@ acting participant's name, whatever transport they used.
 
 ```bash
 workboard serve [--host 127.0.0.1] [--port 8765]
+workboard seed [--reset]
 workboard backup [--output file]
 workboard restore [--input backup.db] [--force]
 workboard doctor [--host <host>] [--port <port>]
@@ -416,6 +449,11 @@ You didn't pass `--as` or set `WORKBOARD_USER`.
 **Q: Where's my data?**
 One SQLite file (`workboard.sqlite`) plus WAL files inside the data directory
 (default `./workboard-data`; override with `--dir`/`WORKBOARD_DATA_DIR`).
+
+**Q: I just want to look at the UI with something on it.**
+`workboard seed` in a throwaway data directory (`--dir ./.scratch`) and open
+the board. Never against a directory you care about: `--reset` deletes
+existing work items.
 
 **Q: Why does `restore --force` fail?**
 A `serve` process is running against that directory. Stop it, restore,

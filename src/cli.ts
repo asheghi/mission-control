@@ -19,6 +19,7 @@ import { handleMcpRequest } from "./api/mcp-http";
 import { runStdioMcpServer } from "./mcp/stdio";
 import { APP_VERSION } from "./version";
 import { backupDatabase, defaultBackupPath, restoreDatabase, runDoctor as doctorChecks } from "./maintenance/backup";
+import { seedBoard } from "./dev/seed";
 import { STATIC_ASSETS } from "./web/static-assets";
 import { boundedDiagnostic } from "./observability/diagnostic";
 
@@ -620,6 +621,30 @@ function runParticipant(ctx: CommandContext, rest: readonly string[]): number {
   }
 }
 
+function runSeed(ctx: CommandContext, rest: readonly string[]): number {
+  const args = parseArgs(rest, new Set());
+  const reset = flag(args, "reset");
+  const db = openInitializedDb(ctx);
+  try {
+    const summary = seedBoard(db, { reset });
+    if (flag(ctx.globalArgs, "json")) {
+      printJson(summary);
+    } else {
+      console.log(`Seeded ${summary.totalItems} work item(s) in ${ctx.dataDir}`);
+      console.log(
+        `  ${summary.participants} participant(s), ${summary.labels} label(s), ` +
+          `${summary.items} item(s), ${summary.comments} comment(s), ${summary.relationships} relationship(s)`,
+      );
+      if (summary.reset) console.log("  (existing work items were replaced)");
+      console.log("");
+      console.log("This is development data. Do not run it against a board you care about.");
+    }
+    return 0;
+  } finally {
+    db.close();
+  }
+}
+
 function runBackup(ctx: CommandContext, rest: readonly string[]): number {
   const args = parseArgs(rest, new Set(["output"]));
   const output = value(args, "output") ?? defaultBackupPath(ctx.dataDir, new Date());
@@ -734,6 +759,8 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         return runParticipant(ctx, commandArgs);
       case "backup":
         return runBackup(ctx, commandArgs);
+      case "seed":
+        return runSeed(ctx, commandArgs);
       case "restore":
         return runRestore(ctx, commandArgs);
       case "doctor":
@@ -783,6 +810,7 @@ function printUsage(): void {
       "  participant rename <n>      Rename a participant (--name <new name>)",
       "  token create                Issue an API token (--participant <name> --name <label>)",
       "  token revoke                Revoke a token (--id <id>)",
+      "  seed [--reset]              Fill an empty board with development data (--reset replaces existing work items)",
       "  backup                      Consistent snapshot (--output <file>)",
       "  restore                     Restore a backup (--input <file>, --force to overwrite)",
       "  doctor                      Health checks (data dir, integrity, schema, FKs, counts, port)",
