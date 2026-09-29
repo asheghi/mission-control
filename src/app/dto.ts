@@ -1,6 +1,8 @@
 // Owned DTOs — the only shapes transports ever see. Database rows never cross
 // the repository boundary un-mapped.
 import type { ItemRelationshipName, ParticipantKind, Priority, WorkItemType, WorkStatus } from "../domain/types";
+import { mediaKindOf, type AttachmentKind } from "../domain/attachments";
+import type { AttachmentJoinedRow } from "../db/repositories/attachments";
 import type { CommentJoinedRow } from "../db/repositories/comments";
 import type { HistoryJoinedRow } from "../db/repositories/history";
 import type { ItemJoinedRow } from "../db/repositories/items";
@@ -96,6 +98,30 @@ export interface TokenDto {
   readonly revokedAt: string | null;
 }
 
+/**
+ * An attachment as every transport sees it.
+ *
+ * `storageKey` is deliberately absent. The key names an object in the backend
+ * and is not a credential the caller needs; exposing it would leak the shape of
+ * the storage layout into REST responses, MCP results, SSE frames, and logs.
+ * Callers address an attachment by `id` and fetch bytes from `contentPath`.
+ */
+export interface AttachmentDto {
+  readonly id: number;
+  readonly itemId: number | null;
+  readonly commentId: number | null;
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly kind: AttachmentKind;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly uploadedBy: AssigneeDto;
+  readonly createdAt: string;
+  readonly committedAt: string;
+  /** Authenticated route that serves the bytes; the UI and MCP clients use this. */
+  readonly contentPath: string;
+}
+
 export function toParticipantDto(row: ParticipantRow): ParticipantDto {
   return {
     id: row.id,
@@ -170,5 +196,31 @@ export function toTokenDto(row: TokenRow): TokenDto {
     createdAt: row.created_at,
     lastUsedAt: row.last_used_at,
     revokedAt: row.revoked_at,
+  };
+}
+
+/** Route template shared by REST and by the UI's preview renderer. */
+export function attachmentContentPath(id: number): string {
+  return `/api/attachments/${id}/content`;
+}
+
+/** Map a committed, fully described attachment row to its wire shape. */
+export function toAttachmentDto(row: AttachmentJoinedRow): AttachmentDto {
+  // A committed row always carries size, hash, and commit time (the table's
+  // CHECK guarantees it); these fallbacks exist only so the mapper itself is
+  // total and never throws on a row that slipped in another way.
+  return {
+    id: row.id,
+    itemId: row.item_id,
+    commentId: row.comment_id,
+    filename: row.filename,
+    mediaType: row.media_type,
+    kind: mediaKindOf(row.media_type),
+    sizeBytes: row.size_bytes ?? 0,
+    sha256: row.sha256 ?? "",
+    uploadedBy: { id: row.created_by, name: row.created_by_name, kind: row.created_by_kind },
+    createdAt: row.created_at,
+    committedAt: row.committed_at ?? row.created_at,
+    contentPath: attachmentContentPath(row.id),
   };
 }

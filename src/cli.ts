@@ -10,15 +10,39 @@ import type { RawItemQuery } from "./app/item-query";
 import { resolveLocalActor, LOCAL_ACTOR_BOOTSTRAP } from "./app/local-actor";
 import { WorkboardService } from "./app/workboard";
 import { WorkboardEventBroker } from "./app/events";
+import type { EventPublisher } from "./app/events";
 import { authenticate, issueToken } from "./auth/service";
 import { initializeDatabase } from "./db/database";
-import { claimServePid, releaseServePid } from "./maintenance/serve-lock";
+import {
+  claimRestoreLock,
+  claimServePid,
+  findRestoreHolder,
+  PID_LOCK_ERROR,
+  PID_LOCK_STALE,
+  releaseRestoreLock,
+  releaseServePid,
+  restoreLockPath,
+  servePidFilePath,
+} from "./maintenance/serve-lock";
 import type { Database } from "bun:sqlite";
 import { createApiHandler } from "./api/app";
+import {
+  BLOB_BACKENDS,
+  configFromFlags,
+  effectiveStorageConfig,
+  readStorageConfig,
+  resolveBlobStore,
+  sameBlobLocation,
+  storageConfigPath,
+  writeStorageConfig,
+} from "./storage/config";
+import type { BlobStore } from "./storage/types";
 import { handleMcpRequest } from "./api/mcp-http";
 import { runStdioMcpServer } from "./mcp/stdio";
 import { APP_VERSION } from "./version";
-import { backupDatabase, defaultBackupPath, restoreDatabase, runDoctor as doctorChecks } from "./maintenance/backup";
+import { backupDatabase, defaultBackupPath, preflightRestore, restoreDatabase, runDoctor as doctorChecks, doctorAttachmentChecks } from "./maintenance/backup";
+import { bundleDatabasePath, createBundle, defaultBundlePath, restoreBundleBlobs } from "./maintenance/bundle";
+import { mkdirSync, statSync } from "node:fs";
 import { seedBoard } from "./dev/seed";
 import { STATIC_ASSETS } from "./web/static-assets";
 import { boundedDiagnostic } from "./observability/diagnostic";
@@ -84,6 +108,53 @@ function openInitializedDb(ctx: CommandContext): Database {
   return initializeDatabase(ctx.dataDir);
 }
 
+
+/**
+ * Build a service bound to this board's configured blob storage.
+ *
+ * Every command goes through here so `serve`, `doctor`, `backup`, and one-off
+ * edits cannot disagree about where attachments live. A board with no explicit
+ * configuration resolves to the filesystem default beside the database.
+ */
+function openServiceWithStorage(
+  db: Database,
+  ctx: CommandContext,
+  extras: { events?: EventPublisher } = {},
+): { service: WorkboardService; store: BlobStore } {
+  const { store } = resolveBlobStore({ dataDir: ctx.dataDir });
+  const service = new WorkboardService(db, systemClock, extras.events, { blobs: store });
+  return { service, store };
+}
+
+/** The storage flags `init` accepts, parsed once. */
+const STORAGE_FLAGS = new Set(["blob-backend", "blob-dir", "blob-bucket", "blob-endpoint", "blob-region", "blob-prefix"]);
+
+function storageFlagsFrom(args: ParsedArgs): Parameters<typeof configFromFlags>[1] {
+  return {
+    ...(value(args, "blob-backend") !== undefined ? { backend: value(args, "blob-backend") as string } : {}),
+    ...(value(args, "blob-dir") !== undefined ? { directory: value(args, "blob-dir") as string } : {}),
+    ...(value(args, "blob-bucket") !== undefined ? { bucket: value(args, "blob-bucket") as string } : {}),
+    ...(value(args, "blob-endpoint") !== undefined ? { endpoint: value(args, "blob-endpoint") as string } : {}),
+    ...(value(args, "blob-region") !== undefined ? { region: value(args, "blob-region") as string } : {}),
+    ...(value(args, "blob-prefix") !== undefined ? { prefix: value(args, "blob-prefix") as string } : {}),
+  };
+}
+
+/** How many attachments currently depend on the configured storage. */
+function countCommittedAttachments(db: Database): number {
+  const row = db.query("SELECT COUNT(*) AS n FROM attachments WHERE state = 'committed'").get() as { n: number } | null;
+  return row?.n ?? 0;
+}
+
+/** A one-line, credential-free description of where attachments will live. */
+function describeStorage(config: { backend: string; directory?: string; bucket?: string; endpoint?: string; prefix?: string }): string {
+  if (config.backend === "s3") {
+    const where = config.endpoint !== undefined ? `${config.bucket} at ${config.endpoint}` : String(config.bucket);
+    return `s3 (${where}${config.prefix !== undefined ? `, prefix ${config.prefix}` : ""})`;
+  }
+  return `filesystem (${config.directory ?? "blobs"})`;
+}
+
 function resolveActor(service: WorkboardService, args: ParsedArgs): Actor {
   const name = value(args, "as") ?? process.env.WORKBOARD_USER ?? "local";
   return resolveLocalActor(service, name);
@@ -97,10 +168,38 @@ function printJson(value: unknown): void {
 // Commands
 
 function runInit(ctx: CommandContext, rest: readonly string[]): number {
-  const args = parseArgs(rest, new Set(["admin"]));
+  const args = parseArgs(rest, new Set(["admin", ...STORAGE_FLAGS]));
   const db = initializeDatabase(ctx.dataDir);
   try {
-    const service = new WorkboardService(db);
+    // Storage is chosen here, once, and remembered for every later command.
+    // Only the flags actually given are applied, so re-running init to change
+    // one setting never discards the others; with no flags at all, an existing
+    // configuration is left exactly as it is.
+    const existing = readStorageConfig(ctx.dataDir);
+    const hasStorageFlags = [...STORAGE_FLAGS].some((name) => value(args, name) !== undefined);
+    const storage = configFromFlags(ctx.dataDir, storageFlagsFrom(args), existing);
+    // Moving the blob location strands every existing attachment: the rows keep
+    // their keys, but the new backend has none of the objects. Refusing to do it
+    // silently is the difference between a config change and data loss.
+    //
+    // The comparison is against the location the board is *effectively* using,
+    // not against the config file: a board with no file is on the filesystem
+    // default, and moving it away from there strands blobs just the same.
+    const effective = effectiveStorageConfig(ctx.dataDir);
+    if (!sameBlobLocation(effective, storage)) {
+      const attachments = countCommittedAttachments(db);
+      if (attachments > 0 && !flag(args, "force")) {
+        fail(
+          `refusing to change attachment storage from ${describeStorage(effective)} to ${describeStorage(storage)}: ` +
+            `${attachments} attachment(s) still live in the current location. ` +
+            "Copy them across first, or pass --force to accept that they become unreachable.",
+        );
+      }
+    }
+    if (existing !== null || hasStorageFlags) writeStorageConfig(ctx.dataDir, storage);
+    const service = new WorkboardService(db, systemClock, undefined, {
+      blobs: resolveBlobStore({ dataDir: ctx.dataDir, config: storage }).store,
+    });
     const firstInit = service.listParticipants(LOCAL_ACTOR_BOOTSTRAP).length === 0;
     const adminName = value(args, "admin") === "" ? "admin" : value(args, "admin") ?? "admin";
     let bootstrapToken: string | undefined;
@@ -112,11 +211,18 @@ function runInit(ctx: CommandContext, rest: readonly string[]): number {
       bootstrapToken = issueToken(db, { participantId: admin.id, name: "bootstrap", now: systemClock.now() }).plaintext;
       if (flag(args, "hide-token")) bootstrapToken = undefined;
     }
+    const storageSummary = describeStorage(storage);
     const message = `Initialized workboard at ${ctx.dataDir}`;
     if (flag(ctx.globalArgs, "json")) {
-      printJson({ dataDir: ctx.dataDir, initialized: true, ...(bootstrapToken ? { token: bootstrapToken } : {}) });
+      printJson({
+        dataDir: ctx.dataDir,
+        initialized: true,
+        storage: { ...storage },
+        ...(bootstrapToken ? { token: bootstrapToken } : {}),
+      });
     } else {
       console.log(message);
+      console.log(`Attachments: ${storageSummary}`);
       if (bootstrapToken !== undefined) {
         console.error("Store this token now; it is not shown again.");
         console.log(bootstrapToken);
@@ -423,7 +529,11 @@ async function runMcpCommand(ctx: CommandContext): Promise<number> {
   }
   const db = openInitializedDb(ctx);
   try {
-    const service = new WorkboardService(db);
+    // The stdio server exposes the same tools as HTTP, so it needs the same
+    // blob storage; without it every attachment tool would fail with "no
+    // attachment storage is configured".
+    const { store } = resolveBlobStore({ dataDir: ctx.dataDir });
+    const service = new WorkboardService(db, systemClock, undefined, { blobs: store });
     const actor = resolveLocalActor(service, actorName);
     await runStdioMcpServer(service, actor);
     return 0;
@@ -439,15 +549,52 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
   const port = Number(portRaw);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) fail(`invalid port: ${portRaw}`);
 
-  const db = initializeDatabase(ctx.dataDir);
+  // A restore replaces the database and the attachment bytes. Starting a server
+  // into that window would read a half-swapped board, so it is refused while a
+  // restore holds the directory. The check is repeated after claiming the serve
+  // PID: without that handshake a restore could acquire its lock between this
+  // first check and our claim, and both operations would proceed.
+  mkdirSync(ctx.dataDir, { recursive: true });
+  const restoring = findRestoreHolder(ctx.dataDir);
+  if (restoring !== null) {
+    fail(`a restore (pid ${restoring}) is replacing ${ctx.dataDir}; wait for it to finish before serving`);
+  }
+
   const otherServe = claimServePid(ctx.dataDir, process.pid);
   if (otherServe !== null) {
-    console.error(`[workboard] warning: another serve (pid ${otherServe}) is already using ${ctx.dataDir}`);
+    if (otherServe === PID_LOCK_ERROR) fail(`cannot lock ${ctx.dataDir} for serving`);
+    if (otherServe === PID_LOCK_STALE) {
+      fail(`stale serve lock at ${servePidFilePath(ctx.dataDir)}; remove it after confirming no server uses this board`);
+    }
+    fail(`another serve (pid ${otherServe}) is already using ${ctx.dataDir}`);
+  }
+  const racedRestore = findRestoreHolder(ctx.dataDir);
+  if (racedRestore !== null) {
+    releaseServePid(ctx.dataDir, process.pid);
+    fail(`a restore (pid ${racedRestore}) is replacing ${ctx.dataDir}; wait for it to finish before serving`);
+  }
+
+  let db: Database;
+  try {
+    db = initializeDatabase(ctx.dataDir);
+  } catch (error) {
+    releaseServePid(ctx.dataDir, process.pid);
+    throw error;
   }
   try {
     const clock: Clock = systemClock;
     const broker = new WorkboardEventBroker(clock);
-    const service = new WorkboardService(db, clock, broker);
+    const { store: blobStore } = resolveBlobStore({ dataDir: ctx.dataDir });
+    const service = new WorkboardService(db, clock, broker, { blobs: blobStore });
+    // Startup maintenance, before anyone is served: interrupted uploads leave
+    // `pending` rows, and any deletion queued by a previous run may still owe
+    // bytes. The sweep drains only when it finds stale rows, so an explicit
+    // drain runs too — a board whose last shutdown happened mid-cascade would
+    // otherwise never work off its queue.
+    void service
+      .sweepPendingAttachments()
+      .then(() => service.drainBlobDeletions())
+      .catch(() => {});
     // The handler is built before Bun.serve returns, so hold the server in a
     // mutable binding: the SSE route calls back into it to exempt its streaming
     // response from the idle timeout that would otherwise end a live feed.
@@ -645,49 +792,133 @@ function runSeed(ctx: CommandContext, rest: readonly string[]): number {
   }
 }
 
-function runBackup(ctx: CommandContext, rest: readonly string[]): number {
+async function runBackup(ctx: CommandContext, rest: readonly string[]): Promise<number> {
+  // `--database-only` is a boolean: listing it here would make the parser
+  // consume the next token as its value, the convention every other flag follows.
   const args = parseArgs(rest, new Set(["output"]));
-  const output = value(args, "output") ?? defaultBackupPath(ctx.dataDir, new Date());
+  const explicitOutput = value(args, "output");
+  const databaseOnly = flag(args, "database-only");
+  // What `--output` names decides the shape, so an existing call that asks for
+  // `snap.db` keeps getting exactly that file. A bundle is a directory, and
+  // silently turning a requested file into a directory would be a trap.
+  const bundleOutput =
+    explicitOutput === undefined
+      ? defaultBundlePath(ctx.dataDir, new Date())
+      : explicitOutput.endsWith(".db")
+        ? null
+        : explicitOutput;
+  const output = bundleOutput ?? explicitOutput ?? defaultBundlePath(ctx.dataDir, new Date());
   const db = openInitializedDb(ctx);
   try {
-    backupDatabase(db, output);
-    if (flag(ctx.globalArgs, "json")) printJson({ backup: output });
-    else console.log(`Backup written to ${output}`);
+    if (databaseOnly || bundleOutput === null) {
+      // An explicit, clearly-labelled escape hatch: this really does omit the
+      // attachment bytes, so it is never the default.
+      backupDatabase(db, output);
+      if (flag(ctx.globalArgs, "json")) printJson({ backup: output, attachments: "omitted" });
+      else console.log(`Database-only backup written to ${output} (attachments omitted)`);
+      return 0;
+    }
+    const { store } = resolveBlobStore({ dataDir: ctx.dataDir });
+    const result = await createBundle({ dataDir: ctx.dataDir, db, blobs: store, outputPath: output, now: new Date() });
+    if (flag(ctx.globalArgs, "json")) {
+      printJson({ backup: result.path, attachmentCount: result.attachmentCount, totalBytes: result.totalBytes });
+    } else {
+      console.log(`Backup written to ${result.path}`);
+      console.log(`  ${result.attachmentCount} attachment(s), ${result.totalBytes} byte(s) of media, plus the database`);
+    }
     return 0;
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   } finally {
     db.close();
   }
 }
 
-function runRestore(ctx: CommandContext, rest: readonly string[]): number {
+async function runRestore(ctx: CommandContext, rest: readonly string[]): Promise<number> {
   const args = parseArgs(rest, new Set(["input"]));
   const input = value(args, "input") ?? args.positionals[0];
   if (input === undefined) fail("--input <file> is required");
-  try {
-    restoreDatabase(ctx.dataDir, input, { force: flag(args, "force") });
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+
+  // A directory is a backup bundle: its bytes go into storage before the
+  // database is swapped. A plain file is a database snapshot from
+  // `backup --database-only`.
+  const isBundle = statSync(input, { throwIfNoEntry: false })?.isDirectory() === true;
+  const databaseSource = isBundle ? bundleDatabasePath(input) : input;
+
+  // Take the lock before preflight. `serve` performs the complementary
+  // check/claim/recheck handshake, so either it publishes its PID first and this
+  // preflight refuses, or this lock appears first and serve refuses. There is no
+  // unprotected interval in which both can decide to proceed.
+  mkdirSync(ctx.dataDir, { recursive: true });
+  const restoreHolder = claimRestoreLock(ctx.dataDir);
+  if (restoreHolder !== null) {
+    if (restoreHolder === PID_LOCK_ERROR) fail(`cannot lock ${ctx.dataDir} for restore`);
+    if (restoreHolder === PID_LOCK_STALE) {
+      fail(`stale restore lock at ${restoreLockPath(ctx.dataDir)}; remove it after confirming no restore is running`);
+    }
+    fail(`another restore (pid ${restoreHolder}) is already replacing ${ctx.dataDir}`);
   }
-  if (flag(ctx.globalArgs, "json")) printJson({ restored: true, dataDir: ctx.dataDir });
-  else console.log(`Restored ${input} into ${ctx.dataDir}`);
-  return 0;
+
+  try {
+    // Establish that this restore will actually be permitted BEFORE writing any
+    // attachment bytes. Without this, a restore refused for a missing --force or
+    // a live server would still have added or overwritten objects in storage.
+    try {
+      preflightRestore(ctx.dataDir, databaseSource, { force: flag(args, "force") });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+
+    let restoredBlobs: { restored: number; skipped: number } | null = null;
+    if (isBundle) {
+      const { store } = resolveBlobStore({ dataDir: ctx.dataDir });
+      try {
+        restoredBlobs = await restoreBundleBlobs({ bundlePath: input, blobs: store });
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    try {
+      restoreDatabase(ctx.dataDir, databaseSource, { force: flag(args, "force") });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    }
+    if (flag(ctx.globalArgs, "json")) {
+      printJson({ restored: true, dataDir: ctx.dataDir, ...(restoredBlobs ?? {}) });
+    } else {
+      console.log(`Restored ${input} into ${ctx.dataDir}`);
+      if (restoredBlobs !== null) {
+        console.log(`  ${restoredBlobs.restored} attachment blob(s) written, ${restoredBlobs.skipped} already present`);
+      }
+    }
+    return 0;
+  } finally {
+    releaseRestoreLock(ctx.dataDir);
+  }
 }
 
-function runDoctorCommand(ctx: CommandContext, rest: readonly string[]): number {
+async function runDoctorCommand(ctx: CommandContext, rest: readonly string[]): Promise<number> {
   const args = parseArgs(rest, new Set(["host", "port"]));
   const portRaw = value(args, "port") ?? "8765";
   const port = Number(portRaw);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) fail(`invalid port: ${portRaw}`);
   const hostArg = value(args, "host");
-  const { healthy, checks } = doctorChecks(ctx.dataDir, {
+  const { healthy, checks } = await doctorChecks(ctx.dataDir, {
     ...(hostArg !== undefined ? { host: hostArg } : {}),
     port,
   });
-  for (const check of checks) {
+  // Attachment storage is checked against the configured backend, so a board
+  // that stores media remotely reports on the place it actually uses.
+  const { store } = resolveBlobStore({ dataDir: ctx.dataDir });
+  const attachmentChecks = await doctorAttachmentChecks(ctx.dataDir, store);
+  const allChecks = [...checks, ...attachmentChecks];
+  for (const check of allChecks) {
     console.log(`${check.ok ? "[ok]" : "[FAIL]"} ${check.name}: ${check.detail}`);
   }
-  console.log(healthy ? "workboard: healthy" : "workboard: unhealthy");
-  return healthy ? 0 : 1;
+  const allHealthy = healthy && attachmentChecks.every((check) => check.ok);
+  console.log(allHealthy ? "workboard: healthy" : "workboard: unhealthy");
+  return allHealthy ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -758,13 +989,13 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       case "participant":
         return runParticipant(ctx, commandArgs);
       case "backup":
-        return runBackup(ctx, commandArgs);
+        return await runBackup(ctx, commandArgs);
       case "seed":
         return runSeed(ctx, commandArgs);
       case "restore":
-        return runRestore(ctx, commandArgs);
+        return await runRestore(ctx, commandArgs);
       case "doctor":
-        return runDoctorCommand(ctx, commandArgs);
+        return await runDoctorCommand(ctx, commandArgs);
       case "help":
       case "--help":
       case "-h":

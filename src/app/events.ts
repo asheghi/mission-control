@@ -12,6 +12,8 @@ export type WorkboardEventType =
   | "item.updated"
   | "item.deleted"
   | "comment.created"
+  | "attachment.created"
+  | "attachment.deleted"
   | "participant.created"
   | "participant.updated"
   | "label.created";

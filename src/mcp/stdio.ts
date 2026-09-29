@@ -1,4 +1,4 @@
-// stdio MCP server (Task 10): the same six tools as HTTP, served over the
+// stdio MCP server (Task 10): the same tools as HTTP, served over the
 // official StdioServerTransport for local agents and smoke tests. Local mode
 // trusts the process owner: the actor comes from the --as participant name,
 // never from tool arguments.

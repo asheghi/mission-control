@@ -14,7 +14,7 @@
 // The browser is skipped, loudly, when this machine has no Chromium: set
 // `WORKBOARD_CHROME` to point at one.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, Page } from "../helpers/browser";
@@ -182,6 +182,46 @@ afterAll(async () => {
   if (browser !== undefined) await browser.close();
   if (board !== undefined) await board.stop();
 });
+
+/** Base64 of a real encoder-produced image, for pastes and picks. */
+const FIXTURE_PNG_BASE64 = readFileSync(join(REPO_ROOT, "test", "fixtures", "media", "probe.png")).toString("base64");
+
+/**
+ * Select files into a hidden `<input type=file>` the way a file picker does.
+ *
+ * `input.files` is read-only, so it is redefined with a `DataTransfer`'s list —
+ * the same thing the browser does when a user picks a file — and then the
+ * `change` event the component listens for is dispatched.
+ */
+function selectFilesScript(selector: string, files: ReadonlyArray<{ name: string; type: string; base64: string }>): string {
+  return `(() => {
+    const input = document.querySelector(${JSON.stringify(selector)});
+    if (input === null) return "missing input";
+    const transfer = new DataTransfer();
+    for (const spec of ${JSON.stringify(files)}) {
+      const bytes = Uint8Array.from(atob(spec.base64), (c) => c.charCodeAt(0));
+      transfer.items.add(new File([bytes], spec.name, { type: spec.type }));
+    }
+    Object.defineProperty(input, "files", { value: transfer.files, configurable: true });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return "selected";
+  })()`;
+}
+
+/** Paste files into an element, as a screenshot paste arrives. */
+function pasteFilesScript(selector: string, files: ReadonlyArray<{ name: string; type: string; base64: string }>): string {
+  return `(() => {
+    const target = document.querySelector(${JSON.stringify(selector)});
+    if (target === null) return "missing target";
+    const transfer = new DataTransfer();
+    for (const spec of ${JSON.stringify(files)}) {
+      const bytes = Uint8Array.from(atob(spec.base64), (c) => c.charCodeAt(0));
+      transfer.items.add(new File([bytes], spec.name, { type: spec.type }));
+    }
+    target.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
+    return "pasted";
+  })()`;
+}
 
 /**
  * Nothing in the page may have logged an error, thrown, failed a request, or
@@ -428,6 +468,82 @@ describe("web UI in a real browser", () => {
       `Array.from(document.querySelectorAll(".board-card-title")).some((link) => link.textContent.includes(${JSON.stringify(title)}))`,
       { description: "the new card from the live feed" },
     );
+    await expectNoProblems();
+  }, 60_000);
+
+  test("uploads an attachment, pastes one into a comment, and renders it inline", async () => {
+    if (skipWithoutChromium()) return;
+    const id = await board.itemIdByTitle("Filter the backlog by label");
+    await signIn(page, board, `#/item/${id}`);
+    await page.waitFor(`document.querySelector("#attachments-heading") !== null`, { description: "the attachments panel" });
+
+    // A picked file uploads and appears in the list with its real size.
+    expect(await page.evaluate<string>(selectFilesScript("#detail-attachment-input", [
+      { name: "picked shot.png", type: "image/png", base64: FIXTURE_PNG_BASE64 },
+    ]))).toBe("selected");
+    await page.waitFor(`document.querySelector(".attachment-row") !== null`, { description: "the uploaded attachment row" });
+    expect(await page.text(".attachment-row")).toContain("picked shot.png");
+    expect(await page.text(".attachment-row")).toContain("335 B");
+
+    // Pasting into the comment box uploads and appends the markdown reference.
+    expect(await page.evaluate<string>(pasteFilesScript("#detail-comment", [
+      { name: "clip.png", type: "image/png", base64: FIXTURE_PNG_BASE64 },
+    ]))).toBe("pasted");
+    await page.waitFor(
+      `document.querySelector("#detail-comment").value.includes("![clip.png](/api/attachments/")`,
+      { description: "the pasted reference in the comment draft" },
+    );
+
+    // An unsupported type is refused immediately, in the page, with a reason.
+    expect(await page.evaluate<string>(selectFilesScript("#detail-attachment-input", [
+      { name: "evil.svg", type: "image/svg+xml", base64: "PHN2Zy8+" },
+    ]))).toBe("selected");
+    await page.waitFor(`document.querySelector(".attachment-notice") !== null`, { description: "the refusal notice" });
+    expect(await page.text(".attachment-notice")).toContain("not an accepted image or video");
+
+    await expectNoProblems();
+  }, 60_000);
+
+  test("renders an inline image in the description preview", async () => {
+    if (skipWithoutChromium()) return;
+    const id = await board.itemIdByTitle("Filter the backlog by label");
+    await signIn(page, board, `#/item/${id}`);
+    await page.waitFor(`document.querySelector("#attachments-heading") !== null`, { description: "the attachments panel" });
+
+    // Add a file, then insert its reference into the description.
+    expect(await page.evaluate<string>(selectFilesScript("#detail-attachment-input", [
+      { name: "inline.png", type: "image/png", base64: FIXTURE_PNG_BASE64 },
+    ]))).toBe("selected");
+    await page.waitFor(`document.querySelector(".attachment-row") !== null`, { description: "the attachment row" });
+
+    await page.click("#body-tab-edit");
+    await page.evaluate(pasteFilesScript("#detail-body-input", [
+      { name: "inline.png", type: "image/png", base64: FIXTURE_PNG_BASE64 },
+    ]));
+    await page.waitFor(
+      `document.querySelector("#detail-body-input").value.includes("![inline.png](/api/attachments/")`,
+      { description: "the reference in the description draft" },
+    );
+
+    // Preview must show a real decoded image, not a broken placeholder.
+    //
+    // This is the assertion that would catch a regression to a plain `src`: the
+    // content route is bearer-authenticated, so an unauthenticated request would
+    // 401 and the image would never decode.
+    await page.click("#body-tab-preview");
+    await page.waitFor(
+      `(() => { const img = document.querySelector("img.attachment-inline"); return img !== null && img.complete && img.naturalWidth > 0; })()`,
+      { description: "the decoded inline image" },
+    );
+    const rendered = await page.evaluate<{ src: string; width: number; height: number }>(
+      `(() => { const img = document.querySelector("img.attachment-inline"); return { src: img.src.slice(0, 5), width: img.naturalWidth, height: img.naturalHeight }; })()`,
+    );
+    // A blob URL proves the bytes were fetched with the token and handed to the
+    // DOM, rather than the element pointing at the authenticated route.
+    expect(rendered.src).toBe("blob:");
+    expect(rendered.width).toBe(32);
+    expect(rendered.height).toBe(32);
+
     await expectNoProblems();
   }, 60_000);
 

@@ -1,3 +1,4 @@
+import type { AttachmentUploadState } from "./attachments";
 import { WORK_ITEM_TYPES } from "../../../domain/types";
 import type { ItemRelationshipName, ParticipantKind, Priority, WorkItemType, WorkStatus } from "../../../domain/types";
 import type { ViewComponentProps } from "../../shell/types";
@@ -191,12 +192,30 @@ export type InlineToken =
   | { readonly kind: "strong"; readonly text: string }
   | { readonly kind: "em"; readonly text: string }
   | { readonly kind: "code"; readonly text: string }
-  | { readonly kind: "link"; readonly text: string; readonly link: NormalizedLink };
+  | { readonly kind: "link"; readonly text: string; readonly link: NormalizedLink }
+  /**
+   * Markdown image syntax (`![alt](url)`) pointing at an attachment on this
+   * board. Only same-origin attachment routes become images: an external URL is
+   * left as text, so a body can never make the browser fetch a third-party
+   * resource or leak a referrer.
+   */
+  | { readonly kind: "image"; readonly text: string; readonly attachmentId: number };
 
 export interface MentionState {
   readonly trigger: MentionTrigger;
   readonly options: readonly DetailParticipant[];
   readonly activeIndex: number;
+}
+
+/** One attachment as the detail view shows it. */
+export interface DetailAttachment {
+  readonly id: number;
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly kind: "image" | "video";
+  readonly sizeBytes: number;
+  readonly contentPath: string;
+  readonly createdAt: string;
 }
 
 export interface DetailState {
@@ -235,6 +254,12 @@ export interface DetailState {
   readonly fieldsBusy: boolean;
   readonly relationshipsBusy: boolean;
   readonly expandedHistory: ReadonlySet<number>;
+  /** Files already attached to this item. */
+  readonly attachments: readonly DetailAttachment[];
+  /** In-flight and settled uploads for this page. */
+  readonly uploads: AttachmentUploadState;
+  readonly openAttachment: (id: number) => void;
+  readonly removeAttachment: (id: number) => void;
   readonly retry: () => void;
   readonly setTitleDraft: (value: string) => void;
   readonly flushTitle: () => Promise<void>;

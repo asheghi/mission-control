@@ -3,7 +3,33 @@ import type { DiffOperation, InlineToken, MentionTrigger, NormalizedLink } from 
 
 const LCS_CELL_BUDGET = 400_000;
 const LINK_PATTERN = /^\[([^\]\n]+)\]\(([^\s)]+)\)$/;
-const INLINE_PATTERN = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^\s)]+\))/g;
+const IMAGE_PATTERN = /^!\[([^\]\n]*)\]\(([^\s)]+)\)$/;
+const INLINE_PATTERN = /(!\[[^\]\n]*\]\([^\s)]+\)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^\s)]+\))/g;
+
+/**
+ * The attachment id an internal content URL points at, or null.
+ *
+ * Only this board's own attachment route qualifies. Anything else — another
+ * origin, a path that merely looks similar, a `javascript:` URL — is not an
+ * image reference, so the markdown stays text rather than becoming a fetch the
+ * page did not intend.
+ */
+export function attachmentIdFromUrl(raw: string, baseOrigin?: string): number | null {
+  const value = raw.trim();
+  const match = /^(?:https?:\/\/[^/]+)?\/api\/attachments\/(\d+)\/content(?:\?.*)?$/.exec(value);
+  if (match === null) return null;
+  if (/^https?:\/\//i.test(value)) {
+    // An absolute URL is accepted only when it names this origin.
+    try {
+      const base = new URL(baseOrigin ?? location.origin);
+      if (new URL(value).origin !== base.origin) return null;
+    } catch {
+      return null;
+    }
+  }
+  const id = Number(match[1]);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
 
 export function normalizeLinkUrl(raw: string, baseOrigin?: string): NormalizedLink | null {
   const value = raw.trim();
@@ -48,7 +74,14 @@ export function tokenizeInline(text: string, baseOrigin?: string): readonly Inli
     if (raw.startsWith("**")) tokens.push({ kind: "strong", text: raw.slice(2, -2) });
     else if (raw.startsWith("*")) tokens.push({ kind: "em", text: raw.slice(1, -1) });
     else if (raw.startsWith("`")) tokens.push({ kind: "code", text: raw.slice(1, -1) });
-    else {
+    else if (raw.startsWith("!")) {
+      // Image syntax is checked before link syntax: `![a](b)` also matches the
+      // plain-link pattern, and whichever runs first decides the token.
+      const imageMatch = IMAGE_PATTERN.exec(raw);
+      const attachmentId = imageMatch?.[2] === undefined ? null : attachmentIdFromUrl(imageMatch[2], baseOrigin);
+      if (attachmentId === null) tokens.push({ kind: "text", text: raw });
+      else tokens.push({ kind: "image", text: imageMatch?.[1] ?? "", attachmentId });
+    } else {
       const linkMatch = LINK_PATTERN.exec(raw);
       const link = linkMatch?.[2] === undefined ? null : normalizeLinkUrl(linkMatch[2], baseOrigin);
       if (link === null || linkMatch?.[1] === undefined) tokens.push({ kind: "text", text: raw });

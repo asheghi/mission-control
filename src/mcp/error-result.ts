@@ -1,7 +1,19 @@
 import { WorkboardError } from "../domain/errors";
 
+/**
+ * A tool result.
+ *
+ * Text is the norm. An `image` block is allowed because a model that can see a
+ * screenshot attached to a bug report is materially more useful than one handed
+ * a URL it cannot fetch — but only for small raster images, never video, and
+ * never as a way to move arbitrary bytes through a JSON tool call.
+ */
+export type McpContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export type McpToolResult = {
-  content: Array<{ type: "text"; text: string }>;
+  content: McpContentBlock[];
   isError?: boolean;
 };
 

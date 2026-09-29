@@ -309,7 +309,7 @@ for JSON-RPC.)
 HTTP**: each request stands alone, so it survives restarts and reconnects
 without session state.
 
-### The nine tools
+### The fourteen tools
 
 | Tool | What it does |
 |---|---|
@@ -322,6 +322,11 @@ without session state.
 | `add_work_relationship` | Add a non-hierarchical relationship relative to `id`: `related`, `predecessor`, `successor`, `duplicate`, or `duplicate_of`. |
 | `remove_work_relationship` | Remove one relationship by its id from the selected item. |
 | `reorder_work` | Move an item within sibling backlog order: `parentId` (null = root), optional `beforeId` (null = append). Tasks cannot move to root. |
+| `list_attachments` | Images and videos attached to item `id`: id, filename, `mediaType`, `sizeBytes`, `contentPath`. Fetch bytes from `contentPath` over REST. |
+| `get_attachment` | One attachment's metadata by `id`. The stored object key is never returned. |
+| `view_attachment` | Return a raster image (png/jpeg/webp/gif, ≤4 MiB) as an image block a model can see. Video and larger images are refused with a pointer to `contentPath`. |
+| `attach_file` | Attach one image or video to item `id` from base64 `contentBase64`. Capped at 4 MiB because the payload is JSON; larger media uses `POST /api/items/<id>/attachments`. `mediaType` is verified against the bytes. |
+| `delete_attachment` | Delete attachment `id` and its stored bytes. |
 
 ### The loop, concretely
 

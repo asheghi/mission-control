@@ -65,7 +65,7 @@ describe("migrate", () => {
     withTempDataDir((dir) => {
       const db = initializeDatabase(dir);
       try {
-        expect(currentSchemaVersion(db)).toBe(3);
+        expect(currentSchemaVersion(db)).toBe(migrations.length);
         const tables = tableNames(db);
         for (const expected of [
           "participants",
@@ -77,6 +77,8 @@ describe("migrate", () => {
           "api_tokens",
           "history",
           "item_links",
+          "attachments",
+          "blob_deletions",
         ]) {
           expect(tables).toContain(expected);
         }
@@ -107,7 +109,7 @@ describe("migrate", () => {
 
         migrate(db, migrations);
 
-        expect(currentSchemaVersion(db)).toBe(3);
+        expect(currentSchemaVersion(db)).toBe(migrations.length);
         expect((db.query("SELECT COUNT(*) AS n FROM items").get() as { n: number }).n).toBe(0);
         expect((db.query("SELECT COUNT(*) AS n FROM comments").get() as { n: number }).n).toBe(0);
         expect((db.query("SELECT COUNT(*) AS n FROM item_labels").get() as { n: number }).n).toBe(0);
@@ -145,7 +147,7 @@ describe("migrate", () => {
       const db = initializeDatabase(dir);
       try {
         migrate(db, migrations);
-        expect(currentSchemaVersion(db)).toBe(3);
+        expect(currentSchemaVersion(db)).toBe(migrations.length);
       } finally {
         db.close();
       }
@@ -162,7 +164,7 @@ describe("migrate", () => {
 
       const second = initializeDatabase(dir);
       try {
-        expect(currentSchemaVersion(second)).toBe(3);
+        expect(currentSchemaVersion(second)).toBe(migrations.length);
         const row = second.query("SELECT name FROM participants WHERE name = 'tester'").get() as
           | { name: string }
           | null;

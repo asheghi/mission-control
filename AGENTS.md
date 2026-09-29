@@ -61,9 +61,11 @@ bun run dev:board
 - MCP endpoint `http://127.0.0.1:8765/mcp` — stateless Streamable HTTP, auth
   via `Authorization: Bearer <token>`. Or stdio: `bun run workboard -- mcp
   --as <name>` (stdout is JSON-RPC; chatter goes to stderr).
-- **Nine tools**: `my_work`, `list_work`,
+- **Fourteen tools**: `my_work`, `list_work`,
   `get_work`, `create_work`, `update_work`, `comment`,
-  `add_work_relationship`, `remove_work_relationship`, `reorder_work`.
+  `add_work_relationship`, `remove_work_relationship`, `reorder_work`,
+  `list_attachments`, `get_attachment`, `view_attachment`, `attach_file`,
+  `delete_attachment`.
 - REST and CLI cover the same operations (docs/manual.md §5 and §7).
 - Actor comes from the presented credential, never arguments: a token for
   HTTP, `--as <name>` / `WORKBOARD_USER` for CLI and stdio MCP (default
@@ -71,6 +73,9 @@ bun run dev:board
   to `local`.
 - MCP tool schemas cap title ≤120 / body ≤10 000, stricter than the domain
   caps (≤256 / ≤100 000) that REST and CLI go through.
+- `attach_file` carries base64 and is capped at 4 MiB; larger media and video
+  belong on `POST /api/items/<id>/attachments`. `view_attachment` returns a
+  raster image up to 4 MiB as an MCP image block and refuses video.
 
 ## The work-item model
 
@@ -147,7 +152,7 @@ gates, so run them before calling work done.
   imported, applied idempotently on any command (`PRAGMA user_version`).
 - `src/api/` — HTTP router, REST endpoints, SSE `/api/events`, stateless MCP
   HTTP adapter, auth middleware.
-- `src/auth/`, `src/mcp/` (stdio + the nine tools), `src/cli.ts` (all CLI
+- `src/auth/`, `src/mcp/` (stdio + the fourteen tools), `src/cli.ts` (all CLI
   commands), `src/maintenance/` (backup, serve PID lock), `src/observability/`
   (logger, request log, diagnostics), `src/dev/` (the development seed —
   its only caller in `src/` is `src/cli.ts`, which exposes it as the `seed`

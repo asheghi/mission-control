@@ -4,7 +4,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { resolveMentions } from "../domain/mentions";
-import { ConflictError, NotFoundError, ValidationError } from "../domain/errors";
+import { ConflictError, InternalError, NotFoundError, PayloadTooLargeError, ValidationError, WorkboardError } from "../domain/errors";
 import type { Actor, Clock, ItemRelationshipName, Priority, StoredItemLinkKind, WorkItemType, WorkStatus } from "../domain/types";
 import { DEFAULT_CHILD_WORK_ITEM_TYPE, DEFAULT_TOP_LEVEL_WORK_ITEM_TYPE, RELATIONSHIPS_BY_LINK, systemClock } from "../domain/types";
 import { statusTimestamps } from "../domain/transitions";
@@ -31,6 +31,8 @@ import {
   type LabelDto,
   type MyWorkItemDto,
   type ParticipantDto,
+  toAttachmentDto,
+  type AttachmentDto,
   toCommentDto,
   toHistoryEntryDto,
   toItemDto,
@@ -38,7 +40,7 @@ import {
   toParticipantDto,
 } from "./dto";
 import { listComments } from "../db/repositories/comments";
-import { createComment } from "../db/repositories/comments";
+import { createComment, getCommentById } from "../db/repositories/comments";
 import { appendHistory, listHistory } from "../db/repositories/history";
 import {
   type ItemColumnChanges,
@@ -69,6 +71,32 @@ import {
 } from "../db/repositories/labels";
 import type { LabelRow } from "../db/repositories/labels";
 import { replaceCommentMentions, replaceItemMentions } from "../db/repositories/mentions";
+import {
+  clearBlobDeletion,
+  commitAttachment,
+  createPendingAttachment,
+  deleteAttachment as deleteAttachmentRow,
+  deletePendingAttachment,
+  getAttachmentById,
+  getAttachmentRowById,
+  listBlobDeletions,
+  listCommentAttachments,
+  listItemAttachments,
+  listPendingAttachments,
+  recordBlobDeletionFailure,
+} from "../db/repositories/attachments";
+import {
+  assertMediaTypeMatches,
+  generateStorageKey,
+  maxBytesFor,
+  mediaKindOf,
+  sanitizeFilename,
+  SNIFF_PREFIX_BYTES,
+  type AttachmentMediaType,
+} from "../domain/attachments";
+import { BlobStoreError, type BlobRange, type BlobStore } from "../storage/types";
+import type { StreamedUpload } from "../api/response";
+import { boundedDiagnostic } from "../observability/diagnostic";
 import {
   createParticipant as createParticipantRow,
   getParticipantById,
@@ -111,6 +139,31 @@ export const updateItemInputSchema = z
   .refine((value) => Object.keys(value).length > 0, "Provide at least one field to update.");
 
 export const addCommentInputSchema = z.strictObject({ body: commentBodySchema });
+
+/**
+ * Exactly one parent. A file belongs to an item or to a comment; the database
+ * CHECK is the authority, and this rejects the ambiguity earlier with a better
+ * message than a constraint error.
+ */
+export const attachmentTargetSchema = z
+  .strictObject({
+    itemId: positiveIdSchema.optional(),
+    commentId: positiveIdSchema.optional(),
+  })
+  .refine((value) => (value.itemId === undefined) !== (value.commentId === undefined), {
+    message: "Provide exactly one of itemId or commentId.",
+  });
+
+export type AttachmentTarget = z.infer<typeof attachmentTargetSchema>;
+
+/** A streamed body plus everything needed to place it, supplied by a transport. */
+export interface UploadAttachmentInput extends AttachmentTarget {
+  /** The client's claim. Verified against sniffed bytes, never trusted. */
+  readonly declaredMediaType: string;
+  /** Display name only; sanitized before it is stored. */
+  readonly filename: string | null;
+  readonly body: StreamedUpload;
+}
 
 export const createItemRelationshipInputSchema = z.strictObject({
   name: itemRelationshipNameSchema,
@@ -204,16 +257,122 @@ interface HistoryDraft {
   readonly newValue: string | null;
 }
 
+export interface WorkboardServiceOptions {
+  /**
+   * Where attachment bytes live. Optional so every existing caller keeps
+   * working: the attachment methods then fail with a clear conflict rather than
+   * pretending an upload succeeded.
+   */
+  readonly blobs?: BlobStore;
+  /**
+   * How many queued blob deletions one maintenance pass attempts. Bounded so a
+   * large backlog cannot stall a startup or a request.
+   */
+  readonly blobDeletionBatch?: number;
+}
+
+const DEFAULT_BLOB_DELETION_BATCH = 50;
+
+/**
+ * Ceiling on one drain pass, so a board with thousands of stranded keys cannot
+ * turn a single request or startup into an unbounded loop.
+ */
+const MAX_DRAIN_ATTEMPTS = 10_000;
+
+/** How long a `pending` upload may sit before a sweep treats it as abandoned. */
+const DEFAULT_PENDING_GRACE_MS = 15 * 60 * 1000;
+
+/** An error and everything it wraps, outermost first, bounded against cycles. */
+function* causeChain(error: unknown): Generator<unknown> {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth < 8 && current !== undefined && current !== null; depth += 1) {
+    if (seen.has(current)) return;
+    seen.add(current);
+    yield current;
+    current = (current as { cause?: unknown }).cause;
+  }
+}
+
+/**
+ * Delete an object that a failed upload may have written, and retire its
+ * durable deletion record only if the bytes are confirmed gone.
+ *
+ * The distinction matters: `clearBlobDeletion` on an object that still exists
+ * erases the only record of it, so nothing would ever retry and the bytes would
+ * leak permanently. Leaving the row is harmless — the next drain finds the
+ * object already absent and clears it then.
+ */
+async function discardBlob(blobs: BlobStore, db: Database, storageKey: string): Promise<void> {
+  try {
+    await blobs.delete(storageKey);
+    clearBlobDeletion(db, storageKey);
+  } catch {
+    // Deliberately not cleared: the queue row is the retry.
+  }
+}
+
+/**
+ * Abandon an upload whose bytes are no longer wanted.
+ *
+ * A request body that is neither consumed nor cancelled holds its connection
+ * open, which turns a refused upload into a hang. Cancelling settles both the
+ * transport and the `finished` promise, so the failure surfaces immediately.
+ */
+async function cancelUpload(body: StreamedUpload): Promise<void> {
+  await body.body.cancel("upload rejected").catch(() => {});
+  await body.finished.catch(() => {});
+}
+
+
 export class WorkboardService {
   private readonly db: Database;
   private readonly clock: Clock;
   // Optional publisher; transports wire a broker to fan events out to SSE.
   private readonly events: EventPublisher | undefined;
+  private readonly blobs: BlobStore | undefined;
+  private readonly blobDeletionBatch: number;
+  /**
+   * Attachment ids whose upload is running right now.
+   *
+   * Age alone cannot prove an upload was abandoned: a 250 MiB video over a slow
+   * link can legitimately take longer than any grace window, and deleting its
+   * row mid-flight would break a live request. An in-process lease is the
+   * accurate signal for the one case this can observe — an upload happening in
+   * THIS process. A row left behind by a crash has no lease, so it is still
+   * swept.
+   */
+  private readonly activeUploads = new Set<number>();
+  /**
+   * The in-flight drain, if any.
+   *
+   * A drain is now started automatically when an item delete queues a cascade,
+   * so a manual call can easily overlap one. Two passes would list the same
+   * batch and act on it twice: harmless for an idempotent delete, but it
+   * double-counts `attempts` on a failure and wastes work. Concurrent callers
+   * share one pass instead.
+   */
+  private draining: Promise<{ deleted: number; failed: number }> | null = null;
 
-  constructor(db: Database, clock: Clock = systemClock, events?: EventPublisher) {
+  constructor(
+    db: Database,
+    clock: Clock = systemClock,
+    events?: EventPublisher,
+    options: WorkboardServiceOptions = {},
+  ) {
     this.db = db;
     this.clock = clock;
     this.events = events;
+    this.blobs = options.blobs;
+    this.blobDeletionBatch = options.blobDeletionBatch ?? DEFAULT_BLOB_DELETION_BATCH;
+  }
+
+  /** The configured blob backend, or a clear failure when none is set up. */
+  private requireBlobs(): BlobStore {
+    if (this.blobs === undefined) {
+      throw new ConflictError("No attachment storage is configured for this board.");
+    }
+    return this.blobs;
   }
 
   // ------------------------------------------------------------------ reads
@@ -467,6 +626,12 @@ export class WorkboardService {
     const deleted = this.db.transaction(() => deleteItemRow(this.db, itemId))();
     if (!deleted) throw new NotFoundError("item", itemId);
     this.events?.publish("item.deleted", itemId);
+    // The cascade queued every attachment's object in `blob_deletions`. Without
+    // a drain here nothing in the product would ever act on them: a delete is
+    // synchronous and its caller has already returned by the time the queue
+    // could be worked. Fire-and-forget, because the queue is durable — if this
+    // pass fails or the process exits, the rows survive for the next one.
+    void this.drainBlobDeletions().catch(() => {});
   }
 
   createRelationship(actor: Actor, itemId: number, input: unknown): ItemDetailDto {
@@ -666,6 +831,330 @@ export class WorkboardService {
       }
       throw error;
     }
+  }
+
+  // ------------------------------------------------------------ attachments
+
+  /**
+   * Store an uploaded file and attach it to an item or a comment.
+   *
+   * Ordering is the whole point of this method. A `pending` row is reserved
+   * first, then the bytes are written, then the row is committed — so a failure
+   * at any step leaves either an invisible row (cheap, swept later) or an
+   * orphaned object that maintenance can find. The reverse order would publish
+   * an attachment whose bytes do not exist yet.
+   *
+   * The declared media type is checked against sniffed bytes *before* the bytes
+   * reach storage, which is why `streamBody` resolves its prefix mid-upload.
+   */
+  async uploadAttachment(actor: Actor, input: UploadAttachmentInput): Promise<AttachmentDto> {
+    const blobs = this.requireBlobs();
+    // Pick the target keys explicitly: the rest of `input` (the stream, the
+    // declared type) is not part of the strict target schema and must not be
+    // parsed by it.
+    const target = parseInput(attachmentTargetSchema, {
+      ...(input.itemId !== undefined ? { itemId: input.itemId } : {}),
+      ...(input.commentId !== undefined ? { commentId: input.commentId } : {}),
+    });
+    if (target.itemId !== undefined && getItemById(this.db, target.itemId) === null) {
+      throw new NotFoundError("item", target.itemId);
+    }
+    if (target.commentId !== undefined && getCommentById(this.db, target.commentId) === null) {
+      throw new NotFoundError("comment", target.commentId);
+    }
+
+    // Sniff first: reading just the prefix decides whether this is even an
+    // acceptable upload, before a single byte is written anywhere.
+    //
+    // Every early rejection below abandons a request body still being sent.
+    // Cancelling it is not tidiness: an undrained body keeps its connection
+    // alive, so a refused upload would hang the caller instead of failing fast.
+    const prefix = await input.body.prefix;
+    let mediaType: AttachmentMediaType;
+    try {
+      mediaType = assertMediaTypeMatches(input.declaredMediaType, prefix);
+    } catch (error) {
+      await cancelUpload(input.body);
+      throw error;
+    }
+    if (mediaType !== input.declaredMediaType.split(";")[0]?.trim().toLowerCase()) {
+      await cancelUpload(input.body);
+      throw new ValidationError("The declared media type does not match the uploaded file.");
+    }
+
+    // The per-kind cap is enforced HERE, against the sniffed type, because this
+    // is the only place the type is known to be true. A transport can only
+    // bound the request by the largest cap of any kind; enforcing the tighter
+    // one after sniffing is what makes "20 MiB for images" real rather than
+    // documentation. It is re-checked below while the bytes stream, so a body
+    // that lies about its length is still stopped mid-flight.
+    const effectiveCap = maxBytesFor(mediaType);
+    if (input.body.declaredBytes !== null && input.body.declaredBytes > effectiveCap) {
+      await cancelUpload(input.body);
+      throw new PayloadTooLargeError(
+        `A ${mediaType} may be at most ${Math.floor(effectiveCap / (1024 * 1024))} MiB.`,
+      );
+    }
+
+    const now = this.clock.now();
+    const storageKey = generateStorageKey();
+    const filename = sanitizeFilename(input.filename);
+    const row = createPendingAttachment(this.db, {
+      itemId: target.itemId ?? null,
+      commentId: target.commentId ?? null,
+      storageKey,
+      filename,
+      mediaType,
+      createdBy: actor.participantId,
+      createdAt: now,
+    });
+
+    // Hash what actually arrived rather than trusting the client. The digest is
+    // integrity metadata for doctor and backup, never an identity.
+    const hasher = new Bun.CryptoHasher("sha256");
+    let sizeBytes = 0;
+    const counting = input.body.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          sizeBytes += chunk.byteLength;
+          // The per-kind cap is enforced on the bytes that actually arrive, not
+          // only on the declared length. A client that omits or understates
+          // `Content-Length` would otherwise stream a 250 MiB "image" past a
+          // 20 MiB limit; this is the check that makes the limit true.
+          if (sizeBytes > effectiveCap) {
+            controller.error(new PayloadTooLargeError(`A ${mediaType} may be at most ${Math.floor(effectiveCap / (1024 * 1024))} MiB.`));
+            return;
+          }
+          hasher.update(chunk);
+          controller.enqueue(chunk);
+        },
+      }),
+    );
+
+    this.activeUploads.add(row.id);
+    try {
+      await blobs.put(storageKey, counting, { ifAbsent: true });
+      await input.body.finished;
+    } catch (error) {
+      // Included below: a body that overran its per-kind cap surfaces here as a
+      // PayloadTooLargeError from the counting transform, and must not be
+      // rewritten into a generic storage failure.
+      // The bytes never landed (or landed partially). Drop the reservation and
+      // make sure no half-written object survives it.
+      deletePendingAttachment(this.db, row.id);
+      // Deleting the pending row queued its key (the trigger fires on every
+      // delete). Clearing that entry is only correct once the object is
+      // confirmed gone: clearing it unconditionally would discard the retry
+      // record for an object that still exists — and a storage backend that
+      // wrote bytes before failing would then leave them orphaned forever, with
+      // nothing left to find them by.
+      await discardBlob(blobs, this.db, storageKey);
+      await cancelUpload(input.body);
+      // A per-kind overflow is a client error (413), not a storage fault, so it
+      // is passed through instead of being folded into "failed to store".
+      if (error instanceof PayloadTooLargeError) throw error;
+      throw this.mapBlobError(error, "store the uploaded file");
+    } finally {
+      this.activeUploads.delete(row.id);
+    }
+
+    const committed = commitAttachment(this.db, row.id, {
+      sizeBytes,
+      sha256: hasher.digest("hex"),
+      committedAt: now,
+    });
+    if (committed === null) {
+      // The parent was deleted while the bytes were in flight, so the row is
+      // gone and the object is now unreferenced. Remove it rather than leaving
+      // an orphan for maintenance to discover; if that removal fails, the queue
+      // row stays so a later pass retries it.
+      await discardBlob(blobs, this.db, storageKey);
+      throw new ConflictError("The work item or comment this file belongs to was deleted during the upload.");
+    }
+
+    // The item id is what a browser needs to know which view is stale. A comment
+    // attachment belongs to an item through its comment, so that id is looked up
+    // rather than publishing a null — which told every client nothing.
+    const owningItemId =
+      committed.item_id ?? (committed.comment_id === null ? null : (getCommentById(this.db, committed.comment_id)?.item_id ?? null));
+    this.events?.publish("attachment.created", owningItemId);
+    const joined = getAttachmentById(this.db, committed.id);
+    if (joined === null) throw new NotFoundError("attachment", committed.id);
+    return toAttachmentDto(joined);
+  }
+
+  /** Attachments on one work item, oldest first. */
+  listItemAttachments(actor: Actor, itemId: number): readonly AttachmentDto[] {
+    void actor;
+    parseInput(positiveIdSchema, itemId);
+    if (getItemById(this.db, itemId) === null) throw new NotFoundError("item", itemId);
+    return listItemAttachments(this.db, itemId).map(toAttachmentDto);
+  }
+
+  /** Attachments on one comment, oldest first. */
+  listCommentAttachments(actor: Actor, commentId: number): readonly AttachmentDto[] {
+    void actor;
+    parseInput(positiveIdSchema, commentId);
+    if (getCommentById(this.db, commentId) === null) throw new NotFoundError("comment", commentId);
+    return listCommentAttachments(this.db, commentId).map(toAttachmentDto);
+  }
+
+  /** Metadata for one attachment; never the storage key. */
+  getAttachment(actor: Actor, attachmentId: number): AttachmentDto {
+    void actor;
+    parseInput(positiveIdSchema, attachmentId);
+    const row = getAttachmentById(this.db, attachmentId);
+    if (row === null) throw new NotFoundError("attachment", attachmentId);
+    return toAttachmentDto(row);
+  }
+
+  /**
+   * Open an attachment's bytes for serving.
+   *
+   * A committed row whose object is missing is reported as storage corruption,
+   * not as an ordinary 404: the caller asked for something the board says
+   * exists, and the two disagreeing is an operational fault worth surfacing.
+   */
+  async openAttachment(
+    actor: Actor,
+    attachmentId: number,
+    range?: BlobRange,
+  ): Promise<{ attachment: AttachmentDto; body: ReadableStream<Uint8Array>; size: number; mediaType: string }> {
+    void actor;
+    const attachment = this.getAttachment(actor, attachmentId);
+    const row = getAttachmentRowById(this.db, attachmentId);
+    if (row === null) throw new NotFoundError("attachment", attachmentId);
+    const blobs = this.requireBlobs();
+    const opened = await this.openBlob(blobs, row.storage_key, range);
+    return { attachment, body: opened.body, size: opened.size, mediaType: row.media_type };
+  }
+
+  /**
+   * Delete an attachment. The row goes first: once it is gone the file is no
+   * longer reachable, and the trigger has already queued the object for
+   * removal, so a failure to delete bytes leaves a retryable queue row rather
+   * than a board that still serves a deleted file.
+   */
+  async deleteAttachment(actor: Actor, attachmentId: number): Promise<void> {
+    void actor;
+    parseInput(positiveIdSchema, attachmentId);
+    const row = getAttachmentRowById(this.db, attachmentId);
+    if (row === null) throw new NotFoundError("attachment", attachmentId);
+    deleteAttachmentRow(this.db, attachmentId);
+    const owningItemId =
+      row.item_id ?? (row.comment_id === null ? null : (getCommentById(this.db, row.comment_id)?.item_id ?? null));
+    this.events?.publish("attachment.deleted", owningItemId);
+    // Best effort now so the common path leaves nothing queued; the queue row
+    // survives if this fails and the next maintenance pass retries it.
+    await this.drainBlobDeletions();
+  }
+
+  /**
+   * Attempt queued blob deletions.
+   *
+   * Idempotent and safe to call anywhere: a delete that succeeds clears its
+   * queue row, and a failure records the attempt and leaves the row for the
+   * next pass. Never throws — maintenance must not fail a request.
+   */
+  async drainBlobDeletions(): Promise<{ deleted: number; failed: number }> {
+    const blobs = this.blobs;
+    if (blobs === undefined) return { deleted: 0, failed: 0 };
+    // One pass at a time; a second caller joins the one already running.
+    if (this.draining !== null) return this.draining;
+    this.draining = this.runDrain(blobs).finally(() => {
+      this.draining = null;
+    });
+    return this.draining;
+  }
+
+  private async runDrain(blobs: BlobStore): Promise<{ deleted: number; failed: number }> {
+
+    let deleted = 0;
+    let failed = 0;
+    // The batch size bounds how much work one pass does at a time; the loop is
+    // what makes the pass finish the job. A single batch would leave a large
+    // cascade — deleting an item with a hundred attachments — with most of its
+    // objects stranded, and nothing in the product ever calls drain again.
+    for (;;) {
+      const pending = listBlobDeletions(this.db, this.blobDeletionBatch);
+      if (pending.length === 0) break;
+      let progressed = false;
+      for (const entry of pending) {
+        try {
+          await blobs.delete(entry.storage_key);
+          clearBlobDeletion(this.db, entry.storage_key);
+          deleted += 1;
+          progressed = true;
+        } catch (error) {
+          recordBlobDeletionFailure(this.db, entry.storage_key, boundedDiagnostic(error));
+          failed += 1;
+        }
+      }
+      // Every key in this batch failed, so another identical batch would fail
+      // the same way. Stop rather than spinning: the queue keeps the rows, and
+      // a later pass retries them.
+      if (!progressed) break;
+      // A permanently failing key must not pin the head of the queue: it has
+      // had its attempt recorded and the next pass will pick it up again.
+      if (deleted + failed > MAX_DRAIN_ATTEMPTS) break;
+    }
+    return { deleted, failed };
+  }
+
+  /**
+   * Remove attachment rows that never finished uploading.
+   *
+   * An upload interrupted by a crash or a killed connection leaves a `pending`
+   * row and possibly an object. Only rows older than `graceMs` are touched, so
+   * an upload still in flight is never mistaken for garbage.
+   */
+  async sweepPendingAttachments(options: { readonly graceMs?: number } = {}): Promise<{ removed: number }> {
+    const graceMs = options.graceMs ?? DEFAULT_PENDING_GRACE_MS;
+    const cutoff = new Date(Date.parse(this.clock.now()) - graceMs).toISOString();
+    const stale = listPendingAttachments(this.db).filter(
+      (row) => row.created_at < cutoff && !this.activeUploads.has(row.id),
+    );
+    for (const row of stale) {
+      deletePendingAttachment(this.db, row.id);
+    }
+    // Deleting the rows queued their keys through the trigger, so one drain
+    // removes whatever bytes those abandoned uploads managed to write.
+    if (stale.length > 0) await this.drainBlobDeletions();
+    return { removed: stale.length };
+  }
+
+  /**
+   * Open a committed attachment's bytes, mapping backend failures onto the
+   * board's own errors so no path or bucket name reaches a caller.
+   */
+  private async openBlob(blobs: BlobStore, storageKey: string, range?: BlobRange) {
+    try {
+      const opened = await blobs.open(storageKey, range);
+      if (opened === null) {
+        throw new InternalError("The stored file for this attachment is missing.");
+      }
+      return opened;
+    } catch (error) {
+      throw this.mapBlobError(error, "read the attachment");
+    }
+  }
+
+  /** Translate a backend failure into the board's own vocabulary. */
+  private mapBlobError(error: unknown, action: string): Error {
+    // A store wraps whatever its source stream threw, so a rejection raised by
+    // the counting transform (an over-cap body, for instance) arrives as a
+    // backend IO failure with the real error as its cause. Walking the cause
+    // chain is what keeps a client error a 413 instead of a 500.
+    for (const candidate of causeChain(error)) {
+      if (candidate instanceof PayloadTooLargeError) return candidate;
+      if (candidate instanceof WorkboardError) return candidate;
+      if (candidate instanceof BlobStoreError && candidate.code === "ALREADY_EXISTS") {
+        return new ConflictError("That file already exists in storage.");
+      }
+    }
+    // The backend's message can name a path or a bucket, so it is deliberately
+    // not forwarded; only the action and a hint that storage is at fault.
+    return new InternalError(`Failed to ${action}.`, { cause: error });
   }
 
   // ---------------------------------------------------------------- helpers

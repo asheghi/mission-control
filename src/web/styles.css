@@ -697,3 +697,104 @@ main.content { padding-top: var(--wb-space-5); }
   .skeleton::after { animation: none; display: none; }
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* --- Attachments --------------------------------------------------------- */
+
+.attachment-drop {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.75rem;
+  border: 1px dashed var(--wb-color-border-default);
+  border-radius: 8px;
+}
+
+.attachment-drop.is-dragging,
+.composer.is-dragging,
+#body-panel-edit.is-dragging {
+  border-color: var(--wb-color-accent-emphasis);
+  background: var(--wb-color-accent-subtle);
+}
+
+.attachment-pick {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--wb-color-accent-fg);
+}
+
+.attachment-pick-inline {
+  margin-right: auto;
+}
+
+.attachment-notice {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.attachment-uploads,
+.attachment-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.attachment-upload,
+.attachment-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.attachment-upload-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+
+.attachment-upload.is-failed .muted {
+  color: var(--wb-color-danger-fg);
+}
+
+.attachment-upload.is-done .muted {
+  color: var(--wb-color-success-fg);
+}
+
+.attachment-row a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 55%;
+}
+
+.attachment-row .chip-remove {
+  margin-left: auto;
+}
+
+/* Media rendered inline in a description or comment. */
+.attachment-inline {
+  display: block;
+  max-width: 100%;
+  max-height: 32rem;
+  margin: 0.5rem 0;
+  border-radius: 6px;
+}
+
+.attachment-inline.is-loading,
+.attachment-inline.is-failed {
+  font-size: 0.85rem;
+  color: var(--wb-color-fg-muted);
+}
+
+video.attachment-inline {
+  width: 100%;
+  background: var(--wb-color-canvas-inset);
+}

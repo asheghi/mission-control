@@ -1,7 +1,10 @@
 import type { ComponentChildren } from "preact";
-import { useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { ITEM_RELATIONSHIP_LABELS, WORK_ITEM_TYPE_LABELS } from "../../../domain/types";
 import { boundDiff, diffLines, formatTime, parseItemId, taskTypeAllowed, tokenizeInline } from "./helpers";
+import { ATTACHMENT_ACCEPT, filesFromDataTransfer, formatBytes } from "./attachments";
+import type { UploadedAttachment } from "./attachments";
+import * as api from "../../api.js";
 import {
   DETAIL_ADD_RELATIONSHIP_NAMES,
   DETAIL_ADD_RELATIONSHIP_NONE,
@@ -41,11 +44,69 @@ function relationshipLabel(name: string): string {
   return ITEM_RELATIONSHIP_LABELS[name as keyof typeof ITEM_RELATIONSHIP_LABELS] ?? name;
 }
 
+/**
+ * An attachment rendered inside a body or comment.
+ *
+ * The bytes are fetched with the bearer token and shown from an object URL
+ * rather than pointing `<img>` at the API path. A plain `src` would be requested
+ * by the browser without the Authorization header — the token is in
+ * localStorage, not a cookie — so the server would answer 401 and the image
+ * would simply not appear. Every URL this creates is revoked when the component
+ * unmounts, because a blob URL holds its bytes for the life of the document.
+ */
+function InlineAttachment({ id, alt }: { id: number; alt: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
+  const [kind, setKind] = useState<"image" | "video">("image");
+
+  useEffect(() => {
+    let cancelled = false;
+    let created: string | null = null;
+    setState("loading");
+    setUrl(null);
+    void (async () => {
+      try {
+        // The media type decides the element, and it comes from the server's
+        // stored, sniffed value rather than from the filename.
+        const meta = await api.getAttachment(id);
+        if (cancelled) return;
+        setKind(meta.data.kind === "video" ? "video" : "image");
+        const objectUrl = await api.fetchAttachmentObjectUrl(id);
+        if (cancelled) {
+          api.releaseAttachmentObjectUrl(objectUrl);
+          return;
+        }
+        created = objectUrl;
+        setUrl(objectUrl);
+        setState("ready");
+      } catch {
+        if (!cancelled) setState("failed");
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (created !== null) api.releaseAttachmentObjectUrl(created);
+    };
+  }, [id]);
+
+  if (state === "failed") {
+    return <span class="attachment-inline is-failed">Attachment {id} could not be shown.</span>;
+  }
+  if (state === "loading" || url === null) {
+    return <span class="attachment-inline is-loading" aria-busy="true">{alt || `Attachment ${id}`}…</span>;
+  }
+  if (kind === "video") {
+    return <video class="attachment-inline" src={url} controls preload="metadata" aria-label={alt || `Attachment ${id}`} />;
+  }
+  return <img class="attachment-inline" src={url} alt={alt || `Attachment ${id}`} loading="lazy" />;
+}
+
 function InlineMarkdown({ token }: { token: InlineToken }) {
   if (token.kind === "text") return <>{token.text}</>;
   if (token.kind === "strong") return <strong>{token.text}</strong>;
   if (token.kind === "em") return <em>{token.text}</em>;
   if (token.kind === "code") return <code translate={false}>{token.text}</code>;
+  if (token.kind === "image") return <InlineAttachment id={token.attachmentId} alt={token.text} />;
   return token.link.external
     ? <a href={token.link.href} target="_blank" rel="noopener noreferrer">{token.text}</a>
     : <a href={token.link.href}>{token.text}</a>;
@@ -496,6 +557,20 @@ function nextTab(key: string, current: BodyTab): BodyTab | null {
 export function BodyEditor({ detail }: { detail: DetailState }) {
   const previewRef = useRef<HTMLButtonElement>(null);
   const editRef = useRef<HTMLButtonElement>(null);
+  const bodyFileRef = useRef<HTMLInputElement>(null);
+
+  /** Upload, then append the references to the description draft. */
+  const attachToBody = (files: File[]): void => {
+    const itemId = detail.id;
+    if (itemId === null || files.length === 0) return;
+    void detail.uploads.uploadFiles(itemId, files).then((uploaded) => {
+      if (uploaded.length === 0) return;
+      const references = attachmentReferences(uploaded);
+      const next = detail.bodyDraft.trim() === "" ? references : `${detail.bodyDraft}\n\n${references}`;
+      detail.setBodyDraft(next);
+    });
+  };
+  const bodyDrop = useFileDrop(attachToBody, detail.id !== null && !detail.deleting);
   const selectTab = (tab: BodyTab, focus = false): void => {
     detail.setBodyTab(tab);
     if (focus) (tab === "preview" ? previewRef.current : editRef.current)?.focus();
@@ -521,7 +596,17 @@ export function BodyEditor({ detail }: { detail: DetailState }) {
       <div id="body-panel-preview" role="tabpanel" aria-labelledby="body-tab-preview" tabIndex={0} hidden={detail.bodyTab !== "preview"}>
         <div class="detail-body-text"><Markdown>{detail.bodyDraft === "" ? "*(no description)*" : detail.bodyDraft}</Markdown></div>
       </div>
-      <div id="body-panel-edit" role="tabpanel" aria-labelledby="body-tab-edit" tabIndex={0} hidden={detail.bodyTab !== "edit"}>
+      <div
+        id="body-panel-edit"
+        role="tabpanel"
+        aria-labelledby="body-tab-edit"
+        tabIndex={0}
+        hidden={detail.bodyTab !== "edit"}
+        class={bodyDrop.dragging ? "is-dragging" : undefined}
+        onDragOver={bodyDrop.handlers.onDragOver}
+        onDragLeave={bodyDrop.handlers.onDragLeave}
+        onDrop={bodyDrop.handlers.onDrop}
+      >
         <label class="sr-only" for="detail-body-input">Edit description</label>
         <textarea id="detail-body-input" class="body-editor" rows={10} value={detail.bodyDraft}
           maxLength={100_000}
@@ -529,15 +614,192 @@ export function BodyEditor({ detail }: { detail: DetailState }) {
           placeholder="Describe the work (markdown-lite: *italic*, **bold**, `code`, links)…"
           onFocus={() => detail.setBodyFocused(true)}
           onBlur={() => { detail.setBodyFocused(false); void detail.flushBody(); }}
-          onInput={(event) => detail.setBodyDraft(event.currentTarget.value)} />
+          onInput={(event) => detail.setBodyDraft(event.currentTarget.value)}
+          onPaste={(event) => {
+            const files = filesFromDataTransfer(event.clipboardData);
+            if (files.length === 0) return;
+            event.preventDefault();
+            attachToBody(files);
+          }} />
+        <input
+          ref={bodyFileRef}
+          id="detail-body-file"
+          class="sr-only"
+          type="file"
+          multiple
+          accept={ATTACHMENT_ACCEPT}
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            attachToBody(files);
+          }}
+        />
+        <label for="detail-body-file" class="attachment-pick attachment-pick-inline">Add images or videos</label>
       </div>
     </section>
   );
 }
 
+/**
+ * Files dropped onto an element, without the browser navigating away.
+ *
+ * `dragover` must call preventDefault or the drop never fires; `dragleave`
+ * fires when moving between child elements, so the highlight is cleared on
+ * drop and on a drag that leaves the element entirely.
+ */
+function useFileDrop(onFiles: (files: File[]) => void, enabled: boolean) {
+  const [dragging, setDragging] = useState(false);
+  const handlers = {
+    onDragOver: (event: DragEvent) => {
+      if (!enabled || !event.dataTransfer) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDragging(true);
+    },
+    onDragLeave: (event: DragEvent) => {
+      if (!enabled) return;
+      // Related target inside the element means this is not a real exit.
+      const next = event.relatedTarget as Node | null;
+      if (next !== null && (event.currentTarget as Node).contains(next)) return;
+      setDragging(false);
+    },
+    onDrop: (event: DragEvent) => {
+      if (!enabled) return;
+      event.preventDefault();
+      setDragging(false);
+      const files = filesFromDataTransfer(event.dataTransfer);
+      if (files.length > 0) onFiles(files);
+    },
+  };
+  return { dragging, handlers };
+}
+
+/**
+ * The attachment list for one work item: a drop target, a file picker, and the
+ * files already attached.
+ *
+ * Uploads are independent and reported per file, because a batch of screenshots
+ * should not fail as a unit and a 200 MB video should not look like one opaque
+ * spinner.
+ */
+export function AttachmentsPanel({ detail }: { detail: DetailState }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const upload = detail.uploads;
+  const picker = (
+    <input
+      ref={inputRef}
+      id="detail-attachment-input"
+      class="sr-only"
+      type="file"
+      multiple
+      accept={ATTACHMENT_ACCEPT}
+      onChange={(event) => {
+        const files = Array.from(event.currentTarget.files ?? []);
+        // Reset first: picking the same file twice must still fire a change.
+        event.currentTarget.value = "";
+        if (files.length > 0) void upload.uploadFiles(detail.id ?? 0, files);
+      }}
+    />
+  );
+  const drop = useFileDrop((files) => void upload.uploadFiles(detail.id ?? 0, files), detail.id !== null && !detail.deleting);
+
+  return (
+    <section class="card detail-attachments" aria-labelledby="attachments-heading" aria-busy={upload.busy}>
+      <div class="attachments-head">
+        <h2 id="attachments-heading">Attachments</h2>
+        {detail.attachments.length === 0 ? <span class="muted">None</span> : <span class="muted">{detail.attachments.length}</span>}
+      </div>
+      <div
+        class={`attachment-drop${drop.dragging ? " is-dragging" : ""}`}
+        onDragOver={drop.handlers.onDragOver}
+        onDragLeave={drop.handlers.onDragLeave}
+        onDrop={drop.handlers.onDrop}
+      >
+        <label for="detail-attachment-input" class="attachment-pick">Add images or videos</label>
+        {picker}
+        <span class="muted">Drop or paste files here; markdown image syntax inserts them inline.</span>
+      </div>
+      {upload.notice === "" ? null : (
+        <div class="notice-banner attachment-notice" role="status">
+          {upload.notice}
+          <button type="button" class="chip-remove" aria-label="Dismiss" onClick={upload.dismissNotice}>×</button>
+        </div>
+      )}
+      {upload.uploads.length === 0 ? null : (
+        <ul class="attachment-uploads">
+          {upload.uploads.map((item) => (
+            <li class={`attachment-upload is-${item.state}`} key={item.id}>
+              <span class="attachment-upload-name">{item.filename}</span>
+              <span class="muted">
+                {item.state === "failed"
+                  ? item.error
+                  : item.state === "done"
+                    ? "Uploaded"
+                    : `${formatBytes(item.loaded)} / ${formatBytes(item.total)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {detail.attachments.length === 0 ? null : (
+        <ul class="attachment-list">
+          {detail.attachments.map((attachment) => (
+            <li class="attachment-row" key={attachment.id}>
+              <a href={attachment.contentPath} onClick={(event) => { event.preventDefault(); detail.openAttachment(attachment.id); }}>
+                {attachment.filename}
+              </a>
+              <span class="muted">{attachment.mediaType} · {formatBytes(attachment.sizeBytes)}</span>
+              <button
+                type="button"
+                class="chip-remove"
+                aria-label={`Delete attachment ${attachment.filename}`}
+                disabled={detail.deleting}
+                onClick={() => detail.removeAttachment(attachment.id)}
+              >×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Markdown references for uploaded files, built from the file/id pairs the hook
+ * returns rather than from positions.
+ *
+ * Uploads complete out of order, so zipping ids against the input array would
+ * name a fast file after a slow one and mislabel everything after a failure.
+ */
+function attachmentReferences(uploaded: readonly UploadedAttachment[]): string {
+  return uploaded
+    .map((entry) => `![${entry.file.name || "attachment"}](/api/attachments/${entry.id}/content)`)
+    .join("\n");
+}
+
 export function CommentComposer({ detail }: { detail: DetailState }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const listId = `mention-options-${detail.id ?? "unknown"}`;
+
+  /**
+   * Upload pasted or dropped files, then append their references to the draft.
+   *
+   * Only successfully uploaded files are referenced: inserting a link to an
+   * upload that failed would put a broken image in the comment.
+   */
+  const attach = (files: File[]): void => {
+    const itemId = detail.id;
+    if (itemId === null || files.length === 0) return;
+    void detail.uploads.uploadFiles(itemId, files).then((uploaded) => {
+      if (uploaded.length === 0) return;
+      const references = attachmentReferences(uploaded);
+      const next = detail.commentDraft.trim() === "" ? references : `${detail.commentDraft}\n${references}`;
+      detail.setCommentDraft(next, next.length);
+    });
+  };
+
+  const drop = useFileDrop(attach, detail.id !== null && !detail.commentBusy);
   /**
    * Insert the mention and keep the textarea focused with the caret after it.
    *
@@ -557,7 +819,13 @@ export function CommentComposer({ detail }: { detail: DetailState }) {
   };
   const activeOption = detail.mention?.options[detail.mention.activeIndex];
   return (
-    <form class="composer card" onSubmit={(event) => { event.preventDefault(); detail.submitComment(); }}>
+    <form
+      class={`composer card${drop.dragging ? " is-dragging" : ""}`}
+      onSubmit={(event) => { event.preventDefault(); detail.submitComment(); }}
+      onDragOver={drop.handlers.onDragOver}
+      onDragLeave={drop.handlers.onDragLeave}
+      onDrop={drop.handlers.onDrop}
+    >
       <label for="detail-comment">Add a comment</label>
       <textarea
         ref={inputRef}
@@ -573,6 +841,13 @@ export function CommentComposer({ detail }: { detail: DetailState }) {
         aria-controls={listId}
         aria-activedescendant={activeOption === undefined ? undefined : `${listId}-${activeOption.id}`}
         onInput={(event) => detail.setCommentDraft(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+        onPaste={(event) => {
+          // Pasting a screenshot is the common case; text paste is untouched.
+          const files = filesFromDataTransfer(event.clipboardData);
+          if (files.length === 0) return;
+          event.preventDefault();
+          attach(files);
+        }}
         onKeyDown={(event) => {
           if (detail.mention !== null) {
             if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -607,6 +882,20 @@ export function CommentComposer({ detail }: { detail: DetailState }) {
         ))}
       </div>
       <div class="composer-actions">
+        <input
+          ref={fileRef}
+          id="detail-comment-file"
+          class="sr-only"
+          type="file"
+          multiple
+          accept={ATTACHMENT_ACCEPT}
+          onChange={(event) => {
+            const files = Array.from(event.currentTarget.files ?? []);
+            event.currentTarget.value = "";
+            attach(files);
+          }}
+        />
+        <label for="detail-comment-file" class="attachment-pick attachment-pick-inline">Attach</label>
         <span class="muted">Ctrl/⌘+Enter to post</span>
         <button class="primary" type="submit" disabled={detail.commentBusy || detail.commentDraft.trim() === ""}>{detail.commentBusy ? "Posting…" : "Post comment"}</button>
       </div>

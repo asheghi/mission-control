@@ -18,9 +18,18 @@ import {
   setRequestParticipant,
 } from "../observability/request-log";
 import type { RequestLogObserver } from "../observability/request-log";
+import { MCP_BASE64_ENVELOPE_OVERHEAD } from "../mcp/tools";
 
 export const MCP_ENDPOINT_PATH = "/mcp";
-export const DEFAULT_MCP_MAX_BODY_BYTES = 1_000_000;
+/**
+ * Body cap for the MCP endpoint.
+ *
+ * Derived from the largest payload a tool advertises rather than chosen
+ * independently: `attach_file` accepts 4 MiB of content as base64, which needs
+ * roughly 5.3 MB of JSON to carry. A smaller cap here would make the tool's own
+ * documented limit unreachable over HTTP.
+ */
+export const DEFAULT_MCP_MAX_BODY_BYTES = Math.max(1_000_000, MCP_BASE64_ENVELOPE_OVERHEAD);
 
 const LOOPBACK_ORIGIN_PATTERN = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/;
 

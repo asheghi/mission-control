@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useAttachmentUpload } from "./attachments";
 import * as apiModule from "../../api.js";
-import { isTerminalAuthError } from "../../public-errors.js";
+import { isTerminalAuthError, publicErrorMessage } from "../../public-errors.js";
 import {
   commentFromResponse,
   detailFromResponse,
@@ -31,6 +32,7 @@ import {
 } from "./types";
 import type {
   BodyTab,
+  DetailAttachment,
   DetailComment,
   DetailItem,
   DetailLabel,
@@ -66,6 +68,10 @@ interface DetailApi {
   createLabel: (input: { name: string; color: string }) => Promise<unknown>;
   addComment: (id: number, body: string) => Promise<unknown>;
   deleteItem: (id: number) => Promise<unknown>;
+  listItemAttachments: (id: number) => Promise<ApiResponse>;
+  deleteAttachment: (id: number) => Promise<unknown>;
+  fetchAttachmentObjectUrl: (id: number) => Promise<string>;
+  releaseAttachmentObjectUrl: (url: string) => void;
 }
 const api = apiModule as DetailApi;
 
@@ -243,6 +249,7 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
   const [fieldsBusy, setFieldsBusy] = useState(false);
   const [relationshipsBusy, setRelationshipsBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [attachments, setAttachments] = useState<readonly DetailAttachment[]>([]);
   const [expandedHistory, setExpandedHistory] = useState<ReadonlySet<number>>(new Set());
 
   // One announcement channel: a status write records the message, and the
@@ -382,10 +389,16 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     else setLoading(true);
     setError("");
     setLabelNotice("");
-    const [detailResult, participantResult, labelResult] = await Promise.allSettled([
-      api.getItem(id), api.listParticipants(), api.listLabels(),
+    const [detailResult, participantResult, labelResult, attachmentResult] = await Promise.allSettled([
+      api.getItem(id), api.listParticipants(), api.listLabels(), api.listItemAttachments(id),
     ]);
     if (!active() || sequence !== fetchSequenceRef.current) return false;
+    // Attachments are supplementary: a failed read leaves the existing list
+    // alone rather than emptying it, and never fails the page.
+    if (attachmentResult.status === "fulfilled") {
+      const loaded = attachmentResult.value?.data;
+      if (Array.isArray(loaded)) setAttachments(loaded);
+    }
     // Keep the label label's own outcome readable inside the label queue's
     // error path, which needs to know whether this read replaced the chips.
     labelReconciledRef.current = options.forceLabelSelection === true && generation >= appliedGenerationRef.current;
@@ -1061,6 +1074,42 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     }
   }, [active, deleting, failAuthentication, flushBeforeDelete, id, setNotice]);
 
+  const attachmentsUpload = useAttachmentUpload(() => { void refresh(true); });
+
+  /**
+   * Show one attachment at full size.
+   *
+   * The bytes are fetched with the token and opened as a blob URL, because a
+   * direct navigation to the API path would be requested without the
+   * Authorization header. The URL is revoked on the next tick: the browser has
+   * already taken what it needs for the new tab.
+   */
+  const openAttachment = useCallback((attachmentId: number): void => {
+    void (async () => {
+      try {
+        const url = await api.fetchAttachmentObjectUrl(attachmentId);
+        window.open(url, "_blank", "noopener,noreferrer");
+        setTimeout(() => api.releaseAttachmentObjectUrl(url), 60_000);
+      } catch {
+        setNotice("That attachment could not be opened.");
+      }
+    })();
+  }, []);
+
+  const removeAttachment = useCallback((attachmentId: number): void => {
+    void (async () => {
+      try {
+        await api.deleteAttachment(attachmentId);
+        if (!active()) return;
+        announce("Attachment deleted.");
+        void refresh(true);
+      } catch (error: unknown) {
+        if (failAuthentication(error)) return;
+        setNotice(publicErrorMessage(error));
+      }
+    })();
+  }, [active, announce, failAuthentication, refresh]);
+
   // --- lifecycle -------------------------------------------------------------
 
   /** Cancel every pending write, so nothing is sent for a view that is gone. */
@@ -1098,6 +1147,7 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     participants, labels, loading, refreshing, notFound, error, notice, announcement,
     titleDraft, titleStatus, bodyDraft, bodyStatus, bodyTab, commentDraft, commentBusy, mention,
     labelDraft, labelNotice, selectedLabelNames, labelsBusy, fieldsBusy, relationshipsBusy, deleting, expandedHistory,
+    attachments, uploads: attachmentsUpload, openAttachment, removeAttachment,
     retry: () => void refresh(false),
     setTitleDraft,
     flushTitle,

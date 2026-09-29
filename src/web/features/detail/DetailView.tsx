@@ -1,4 +1,4 @@
-import { BodyEditor, CommentComposer, Comments, DetailHeader, DetailStatus, FieldControls, History, LabelsEditor, Relationships } from "./components";
+import { AttachmentsPanel, BodyEditor, CommentComposer, Comments, DetailHeader, DetailStatus, FieldControls, History, LabelsEditor, Relationships } from "./components";
 import { useDetail } from "./hooks";
 import type { DetailViewProps } from "./types";
 
@@ -50,6 +50,7 @@ export function DetailView(props: DetailViewProps) {
         <Relationships detail={detail} />
         <FieldControls detail={detail} />
         <CommentComposer detail={detail} />
+        <AttachmentsPanel detail={detail} />
         <LabelsEditor detail={detail} />
         <Comments detail={detail} />
         <History detail={detail} />

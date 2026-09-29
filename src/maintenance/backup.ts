@@ -12,7 +12,9 @@ import { Database as SqliteDatabase } from "bun:sqlite";
 import { databaseFilePath, initializeDatabase } from "../db/database";
 import { currentSchemaVersion } from "../db/migrate";
 import { migrations } from "../db/schema";
-import { findRunningServePid, servePidFilePath } from "./serve-lock";
+import { findRestoreHolder, findRunningServePid, servePidFilePath } from "./serve-lock";
+import { listAllCommittedAttachments, listBlobDeletions, listPendingAttachments, listQueuedStorageKeys } from "../db/repositories/attachments";
+import type { BlobStore } from "../storage/types";
 
 const SQLITE_HEADER = "SQLite format 3\0";
 const REQUIRED_TABLES = [
@@ -99,7 +101,15 @@ export function validateBackupFile(path: string): BackupValidation {
   }
 }
 
-export function restoreDatabase(dataDir: string, backupPath: string, options: { force?: boolean } = {}): void {
+/**
+ * Every reason a restore would be refused, checked without changing anything.
+ *
+ * Split out from the restore itself so a caller that has other work to do first
+ * — writing a bundle's attachment bytes into storage — can establish that the
+ * restore will actually be allowed before doing any of it. Otherwise a restore
+ * that is ultimately rejected has already modified storage as a side effect.
+ */
+export function preflightRestore(dataDir: string, backupPath: string, options: { force?: boolean } = {}): void {
   const validation = validateBackupFile(backupPath);
   if (!validation.ok) throw new Error(`refusing to restore: ${validation.reason}`);
 
@@ -117,7 +127,18 @@ export function restoreDatabase(dataDir: string, backupPath: string, options: { 
         `or remove ${servePidFilePath(dataDir)} if that PID is stale`,
     );
   }
+  const restoring = findRestoreHolder(dataDir);
+  if (restoring !== null && restoring !== process.pid) {
+    throw new Error(`refusing to restore: another restore (pid ${restoring}) holds ${dataDir}`);
+  }
+}
 
+export function restoreDatabase(dataDir: string, backupPath: string, options: { force?: boolean } = {}): void {
+  // The checks are the same ones a caller may already have run; running them
+  // again here keeps this function safe to call on its own.
+  preflightRestore(dataDir, backupPath, options);
+
+  const target = databaseFilePath(dataDir);
   mkdirSync(dataDir, { recursive: true });
   // Stale WAL/SHM files from the previous database would corrupt the restored
   // file on open; remove them before swapping in the backup.
@@ -136,6 +157,88 @@ export function restoreDatabase(dataDir: string, backupPath: string, options: { 
 export interface DoctorOptions {
   readonly host?: string;
   readonly port?: number;
+}
+
+export interface DoctorAttachmentChecks {
+  readonly store: BlobStore;
+}
+
+/**
+ * Attachment-specific checks, kept separate from the database ones so a board
+ * with no storage configured still reports healthy instead of failing on a
+ * feature it does not use.
+ *
+ * Nothing here deletes anything: `doctor` reports, and repair stays an explicit
+ * separate action, so a scan can never race an upload that is in flight.
+ */
+export async function doctorAttachmentChecks(dataDir: string, store: BlobStore): Promise<CheckResult[]> {
+  const checks: CheckResult[] = [];
+  const record = (name: string, ok: boolean, detail: string): void => {
+    checks.push({ name, ok, detail });
+  };
+
+  // 1. The backend is reachable. A list is the cheapest read that proves it.
+  const present = new Set<string>();
+  try {
+    for await (const key of store.listKeys()) present.add(key);
+    record("attachment storage", true, `reachable, ${present.size} object(s) stored`);
+  } catch (error) {
+    record("attachment storage", false, `${dataDir}: ${error instanceof Error ? error.message : String(error)}`);
+    return checks;
+  }
+
+  let db: ReturnType<typeof initializeDatabase> | null = null;
+  try {
+    db = initializeDatabase(dataDir);
+    const attachments = listAllCommittedAttachments(db);
+    const pending = listPendingAttachments(db);
+    const queued = listQueuedStorageKeys(db);
+
+    // 2. Every committed row has its bytes, and they are the right size.
+    let missing = 0;
+    let sizeMismatch = 0;
+    let referencedBytes = 0;
+    for (const row of attachments) {
+      const info = await store.stat(row.storage_key);
+      if (info === null) {
+        missing += 1;
+        continue;
+      }
+      if (row.size_bytes !== null && info.size !== row.size_bytes) sizeMismatch += 1;
+      referencedBytes += info.size;
+    }
+    record(
+      "attachment integrity",
+      missing === 0 && sizeMismatch === 0,
+      `${attachments.length} attachment(s), ${missing} missing blob(s), ${sizeMismatch} size mismatch(es)`,
+    );
+
+    // 3. Objects nobody references: space a delete failed to reclaim.
+    const referenced = new Set(attachments.map((row) => row.storage_key));
+    let orphans = 0;
+    for (const key of present) {
+      if (!referenced.has(key)) orphans += 1;
+    }
+    record("orphaned objects", orphans === 0, `${orphans} object(s) not referenced by any attachment`);
+
+    // 4. Interrupted uploads, which are invisible to every read path.
+    record("pending uploads", pending.length === 0, `${pending.length} unfinished upload(s)`);
+
+    // 5. Queued deletions, including ones that keep failing.
+    const stuck = listBlobDeletions(db, 10_000).filter((entry) => entry.attempts >= 3);
+    record(
+      "queued blob deletions",
+      stuck.length === 0,
+      `${queued.length} queued, ${stuck.length} failing repeatedly`,
+    );
+
+    record("attachment bytes", true, `${referencedBytes} byte(s) referenced by committed attachments`);
+  } catch (error) {
+    record("attachment metadata", false, `open failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    db?.close();
+  }
+  return checks;
 }
 
 export function runDoctor(dataDir: string, options: DoctorOptions = {}): { healthy: boolean; checks: CheckResult[] } {

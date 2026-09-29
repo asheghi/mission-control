@@ -12,7 +12,7 @@ import { initializeDatabase } from "../../src/db/database";
 import { WorkboardService } from "../../src/app/workboard";
 import { WorkboardEventBroker } from "../../src/app/events";
 import { authenticate, issueToken } from "../../src/auth/service";
-import { handleMcpRequest } from "../../src/api/mcp-http";
+import { DEFAULT_MCP_MAX_BODY_BYTES, handleMcpRequest } from "../../src/api/mcp-http";
 import type { Actor, Clock } from "../../src/domain/types";
 
 function advancingClock(): Clock {
@@ -93,10 +93,10 @@ function toolText(result: unknown): { parsed: any; isError: boolean } {
   return { parsed: JSON.parse(typed.content[0]?.text ?? "null"), isError: typed.isError === true };
 }
 
-const EXPECTED_TOOLS = ["add_work_relationship", "comment", "create_work", "get_work", "list_work", "my_work", "remove_work_relationship", "reorder_work", "update_work"];
+const EXPECTED_TOOLS = ["add_work_relationship", "attach_file", "comment", "create_work", "delete_attachment", "get_attachment", "get_work", "list_attachments", "list_work", "my_work", "remove_work_relationship", "reorder_work", "update_work", "view_attachment"];
 
 describe("stateless MCP HTTP endpoint", () => {
-  test("initializes with no session id and exposes the nine tools", async () => {
+  test("initializes with no session id and exposes the full tool set", async () => {
     await withMcpServer(async ({ url, aliceToken }) => {
       const { client, transport } = await connectClient(url, aliceToken);
       try {
@@ -226,9 +226,11 @@ describe("stateless MCP HTTP endpoint", () => {
 
   test("the body cap counts bytes, not UTF-16 code units", async () => {
     await withMcpServer(async ({ url, aliceToken }) => {
-      // "€" is 3 bytes in UTF-8: ~1.2 MB of bytes but only ~400k code units, so
-      // only a byte-accurate cap rejects this as 413.
-      const multibytePadding = "€".repeat(400_000);
+      // "€" is 3 bytes in UTF-8 but one UTF-16 code unit, so a payload built
+      // from it exceeds the byte cap while staying well under it as a string
+      // length. Only a byte-accurate cap rejects this as 413; one counting
+      // `String.length` would let it through.
+      const multibytePadding = "€".repeat(Math.ceil(DEFAULT_MCP_MAX_BODY_BYTES / 3) + 100_000);
       const response = await fetch(`${url}/mcp`, {
         method: "POST",
         headers: {

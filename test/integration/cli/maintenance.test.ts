@@ -154,14 +154,17 @@ describe("serve pid lock", () => {
       expect(claimServePid(dir, process.pid)).toBeNull();
       expect(findRunningServePid(dir)).toBe(process.pid);
 
-      // Re-claiming with our own PID is a no-op: no *other* server to report.
-      expect(claimServePid(dir, process.pid)).toBeNull();
+      // A second claimant in the same process is still a second server and must
+      // be rejected; process-level idempotence would admit embedded invocations.
+      expect(claimServePid(dir, process.pid)).toBe(process.pid);
 
-      // A genuinely different live server is reported to the caller.
+      // A genuinely different live server is rejected without replacing the
+      // recorded holder. Losing the older PID would let restore run underneath
+      // that still-live server after the newer process exits.
       const child = Bun.spawn(["sleep", "5"]);
       try {
         expect(claimServePid(dir, child.pid)).toBe(process.pid);
-        expect(findRunningServePid(dir)).toBe(child.pid);
+        expect(findRunningServePid(dir)).toBe(process.pid);
       } finally {
         child.kill();
       }

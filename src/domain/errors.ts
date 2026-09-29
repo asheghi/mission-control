@@ -51,8 +51,8 @@ export class ForbiddenError extends WorkboardError {
 }
 
 export class PayloadTooLargeError extends WorkboardError {
-  constructor() {
-    super("PAYLOAD_TOO_LARGE", "The request body is too large.");
+  constructor(message = "The request body is too large.") {
+    super("PAYLOAD_TOO_LARGE", message);
   }
 }
 

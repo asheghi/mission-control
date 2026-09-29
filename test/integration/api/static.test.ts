@@ -820,6 +820,8 @@ describe("static web shell", () => {
     expect(apiImporters.map((source) => source.path).sort()).toEqual([
       "features/backlog/BacklogView.tsx",
       "features/board/hooks.ts",
+      "features/detail/attachments.ts",
+      "features/detail/components.tsx",
       "features/detail/hooks.ts",
       "features/list/hooks.ts",
       // The entry point consumes a `#token=...` development link before the app

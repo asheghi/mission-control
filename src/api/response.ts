@@ -143,3 +143,223 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
     throw new ValidationError("Malformed JSON body.");
   }
 }
+
+/** What a streamed binary body yielded: the stream to store and what was seen. */
+export interface StreamedUpload {
+  /** The bytes, as a stream the BlobStore consumes exactly once. */
+  readonly body: ReadableStream<Uint8Array>;
+  /**
+   * Resolves with the leading bytes captured for signature sniffing.
+   *
+   * A promise, not a value: the prefix cannot exist until bytes have flowed,
+   * and sniffing must happen before the bytes are committed to storage. Await
+   * this *before* handing `body` to the backend.
+   */
+  readonly prefix: Promise<Uint8Array>;
+  /** Resolves once the stream has been fully consumed, or rejects on failure. */
+  readonly finished: Promise<void>;
+  /**
+   * The `Content-Length` the client declared, or null when absent.
+   *
+   * Exposed so a caller can apply a tighter cap than the streaming one once it
+   * knows the media type — refusing a 200 MiB image from its header is far
+   * cheaper than streaming 20 MiB and then aborting.
+   */
+  readonly declaredBytes: number | null;
+}
+
+/**
+ * Streams a request body to a consumer with a hard byte cap, without ever
+ * buffering the whole body.
+ *
+ * `readBodyText` deliberately accumulates (it must, to produce a string); a
+ * video upload cannot. This hands the caller a stream it forwards to storage
+ * while watching the running total, so the cap is enforced by cancelling
+ * mid-flight: an oversized or lying `content-length` costs a bounded number of
+ * bytes rather than a full buffer.
+ *
+ * The prefix resolution is the sequencing point that makes the upload safe:
+ * the caller awaits `prefix`, decides whether the declared media type is
+ * believable, and only then lets storage consume `body`.
+ */
+export function streamBody(
+  request: Request,
+  maxBytes: number,
+  prefixBytes: number,
+): StreamedUpload {
+  const declaredHeader = request.headers.get("content-length");
+  const declared = Number(declaredHeader ?? "");
+  if (declaredHeader !== null && Number.isFinite(declared) && declared > maxBytes) {
+    throw new PayloadTooLargeError();
+  }
+  const source = request.body;
+  if (source === null) {
+    throw new ValidationError("A request body is required.");
+  }
+
+  const prefixChunks: Uint8Array[] = [];
+  let prefixLength = 0;
+  let prefixSettled = false;
+  let capturePrefix: (bytes: Uint8Array) => void = () => {};
+  let failPrefix: (error: unknown) => void = () => {};
+  const prefix = new Promise<Uint8Array>((resolve, reject) => {
+    capturePrefix = resolve;
+    failPrefix = reject;
+  });
+  // The caller may reject the upload (a lying content-type) without ever
+  // consuming the body; that rejection must not surface as an unhandled one.
+  prefix.catch(() => {});
+
+  let total = 0;
+  let settled = false;
+  let resolveFinished: () => void = () => {};
+  let rejectFinished: (error: unknown) => void = () => {};
+  const finished = new Promise<void>((resolve, reject) => {
+    resolveFinished = resolve;
+    rejectFinished = reject;
+  });
+  finished.catch(() => {});
+
+  // One read path, no concurrency. `prime` and the body's `pull` both need bytes
+  // from the same reader, and two overlapping `read()` calls on one reader lose
+  // chunks between them. Rather than coordinate two readers with flags and
+  // waiters — which produced a subtle race three times over — every read goes
+  // through this single async function, whose result is consumed in turn.
+  const reader = source.getReader();
+  let readDone = false;
+
+  /** Read the next chunk, or record exhaustion/failure. Never called twice at once. */
+  const nextChunk = async (): Promise<PendingChunk> => {
+    if (readDone) return { done: true };
+    try {
+      const { done, value } = await reader.read();
+      if (done) {
+        readDone = true;
+        return { done: true };
+      }
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("payload too large").catch(() => {});
+        readDone = true;
+        return { error: new PayloadTooLargeError() };
+      }
+      return { value };
+    } catch (error) {
+      readDone = true;
+      return { error };
+    }
+  };
+
+  /**
+   * Read ahead until enough leading bytes exist to sniff, before anyone
+   * consumes `body`.
+   *
+   * This is what makes the prefix usable: the caller must validate the media
+   * type before storing anything, but a stream only produces bytes when pulled.
+   * Waiting for a consumer to fill the prefix would deadlock, and reading in
+   * parallel with that consumer loses data. So this loop reads, buffers into
+   * `pending`, and stops the moment the prefix is settled; the body then drains
+   * `pending` before reading more.
+   */
+  // Chunks read while filling the prefix, handed to the body in order.
+  const pending: PendingChunk[] = [];
+
+  /**
+   * Read ahead until enough leading bytes exist to sniff, before anyone
+   * consumes `body`.
+   *
+   * This is what makes the prefix usable: the caller must validate the media
+   * type before storing anything, but a stream only produces bytes when pulled.
+   * Waiting for a consumer to fill the prefix would deadlock, so this loop
+   * reads and buffers; the body then delivers what was buffered before reading
+   * more.
+   */
+  const prime = (async () => {
+    try {
+      while (!prefixSettled) {
+        const chunk = await nextChunk();
+        pending.push(chunk);
+        if (chunk.error !== undefined) {
+          prefixSettled = true;
+          failPrefix(chunk.error);
+          return;
+        }
+        if (chunk.done === true) {
+          prefixSettled = true;
+          capturePrefix(joinPrefix(prefixChunks, prefixLength));
+          return;
+        }
+        const value = chunk.value as Uint8Array;
+        const take = Math.min(prefixBytes - prefixLength, value.byteLength);
+        if (take > 0) {
+          prefixChunks.push(value.subarray(0, take));
+          prefixLength += take;
+        }
+        if (prefixLength >= prefixBytes) {
+          prefixSettled = true;
+          capturePrefix(joinPrefix(prefixChunks, prefixLength));
+        }
+      }
+    } catch (error) {
+      prefixSettled = true;
+      failPrefix(error);
+    }
+  })();
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        // Wait for priming to finish first. Pulling while `prime` is mid-read
+        // would call `nextChunk` concurrently with it, which is exactly the
+        // overlap this design removes.
+        await prime;
+        const next = pending.length > 0 ? (pending.shift() as PendingChunk) : await nextChunk();
+        if (next.done === true) {
+          controller.close();
+          settleFinished();
+          return;
+        }
+        if (next.error !== undefined) {
+          controller.error(next.error);
+          settleFinished(next.error);
+          return;
+        }
+        controller.enqueue(next.value as Uint8Array);
+      } catch (error) {
+        controller.error(error);
+        settleFinished(error);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => {});
+      settleFinished(new Error("upload cancelled"));
+    },
+  });
+
+  function settleFinished(error?: unknown): void {
+    if (settled) return;
+    settled = true;
+    if (error === undefined) resolveFinished();
+    else rejectFinished(error);
+  }
+
+  void prime;
+  return { body, prefix, finished, declaredBytes: Number.isFinite(declared) && declaredHeader !== null ? declared : null };
+}
+
+/** One read-ahead result, or the terminal/error marker for it. */
+interface PendingChunk {
+  readonly value?: Uint8Array;
+  readonly done?: true;
+  readonly error?: unknown;
+}
+
+function joinPrefix(chunks: readonly Uint8Array[], length: number): Uint8Array {
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}

@@ -201,7 +201,15 @@ export function AppShell() {
     handle = api.subscribeEvents(
       liveRefresh.guard(token, {
         onEvent: (event: { event: string }) => {
-          if (event.event.startsWith("item.") || event.event === "comment.created") liveRefresh.viewEvent();
+          // Attachment changes alter what the detail view shows, so they belong
+          // in the same refresh set as item and comment changes.
+          if (
+            event.event.startsWith("item.") ||
+            event.event === "comment.created" ||
+            event.event.startsWith("attachment.")
+          ) {
+            liveRefresh.viewEvent();
+          }
         },
         onComment: () => liveRefresh.connected(),
         onClose: () => {

@@ -9,6 +9,7 @@ import { HttpRouter } from "./router";
 import { registerItemRoutes } from "./items";
 import { registerParticipantRoutes } from "./participants";
 import { registerLabelRoutes } from "./labels";
+import { registerAttachmentRoutes } from "./attachments";
 import { registerEventsRoute } from "./events";
 import { handleMcpRequest, MCP_ENDPOINT_PATH } from "./mcp-http";
 import { createLogger } from "../observability/logger";
@@ -70,6 +71,7 @@ export function createApiHandler(deps: ApiHandlerDependencies): (request: Reques
   registerItemRoutes(router, { service: deps.service, maxBodyBytes });
   registerParticipantRoutes(router, { service: deps.service, maxBodyBytes });
   registerLabelRoutes(router, { service: deps.service, maxBodyBytes });
+  registerAttachmentRoutes(router, { service: deps.service });
   registerEventsRoute(router, {
     broker: deps.broker,
     ...(deps.heartbeatMs !== undefined ? { heartbeatMs: deps.heartbeatMs } : {}),

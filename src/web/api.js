@@ -119,6 +119,113 @@ export const listParticipants = () => api("/api/participants");
 export const listLabels = () => api("/api/labels");
 export const createLabel = (input) => api("/api/labels", { method: "POST", body: input });
 
+// --- Attachments -------------------------------------------------------------
+
+export const listItemAttachments = (itemId) => api(`/api/items/${itemId}/attachments`);
+export const getAttachment = (id) => api(`/api/attachments/${id}`);
+export const deleteAttachment = (id) => api(`/api/attachments/${id}`, { method: "DELETE" });
+
+/**
+ * Upload one file to a work item.
+ *
+ * The body is the raw file with the filename in `X-Filename`, matching the REST
+ * contract: one file per request, no multipart. `XMLHttpRequest` is used rather
+ * than `fetch` because `fetch` upload progress is not reliably reported, and
+ * progress is the whole point of a per-file upload in a UI.
+ *
+ * Resolves with the attachment, or rejects with an ApiError carrying the
+ * server's own message so the caller can show a real reason.
+ */
+export function uploadItemAttachment(itemId, file, options = {}) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `/api/items/${itemId}/attachments`);
+    const token = getToken();
+    if (token) request.setRequestHeader("Authorization", `Bearer ${token}`);
+    request.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    request.setRequestHeader("X-Filename", encodeURIComponent(file.name || "attachment"));
+    request.responseType = "text";
+
+    const onAbort = () => request.abort();
+    if (options.signal) {
+      if (options.signal.aborted) {
+        reject(new ApiError("ABORTED", "Upload cancelled.", 0));
+        return;
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    const finish = (fn) => (value) => {
+      if (options.signal) options.signal.removeEventListener("abort", onAbort);
+      fn(value);
+    };
+
+    request.upload.onprogress = (event) => {
+      if (options.onProgress && event.lengthComputable) {
+        options.onProgress({ loaded: event.loaded, total: event.total });
+      }
+    };
+    request.onerror = finish(() => reject(new ApiError("NETWORK", "The upload could not reach the server.", 0)));
+    request.ontimeout = finish(() => reject(new ApiError("TIMEOUT", "The upload timed out.", 0)));
+    request.onabort = finish(() => reject(new ApiError("ABORTED", "Upload cancelled.", 0)));
+    request.onload = finish(() => {
+      let payload = null;
+      try {
+        payload = JSON.parse(request.responseText);
+      } catch {
+        payload = null;
+      }
+      if (request.status >= 200 && request.status < 300 && payload && payload.data) {
+        resolve(payload.data);
+        return;
+      }
+      const error = (payload && payload.error) || {};
+      reject(new ApiError(error.code || "HTTP_ERROR", error.message || `Upload failed (${request.status}).`, request.status, error.details));
+    });
+    request.send(file);
+  });
+}
+
+/**
+ * Fetch attachment bytes with the bearer token and return an object URL.
+ *
+ * An `<img src="/api/attachments/N/content">` would be requested by the browser
+ * WITHOUT the Authorization header, because the token lives in localStorage
+ * rather than a cookie — the server would (correctly) answer 401. So the bytes
+ * are fetched here and handed to the renderer as a blob URL.
+ *
+ * Every URL handed out is tracked so it can be revoked: a blob URL keeps its
+ * data alive for the lifetime of the document, and a signed-out page must not
+ * still hold decoded screenshots in memory.
+ */
+const objectUrls = new Set();
+
+export async function fetchAttachmentObjectUrl(id) {
+  const token = getToken();
+  const response = await fetch(`/api/attachments/${id}/content`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) {
+    throw new ApiError("HTTP_ERROR", `Attachment ${id} could not be loaded.`, response.status);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  objectUrls.add(url);
+  return url;
+}
+
+export function releaseAttachmentObjectUrl(url) {
+  if (!url || !objectUrls.has(url)) return;
+  URL.revokeObjectURL(url);
+  objectUrls.delete(url);
+}
+
+/** Release every outstanding URL. Called on sign-out and on teardown. */
+export function releaseAllAttachmentObjectUrls() {
+  for (const url of objectUrls) URL.revokeObjectURL(url);
+  objectUrls.clear();
+}
+
 // Server-Sent Events via fetch-stream (EventSource cannot send the bearer
 // header). Returns a controller-shaped object with .close().
 //
