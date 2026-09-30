@@ -389,10 +389,28 @@ main.content { padding-top: var(--wb-space-5); }
    hierarchy on its own, so the tint reinforces it instead of encoding it. */
 .backlog-child-row { background: color-mix(in srgb, var(--wb-color-fg-default) 4%, var(--wb-color-canvas-default)); }
 .backlog-item-cell { min-width: 20rem; }
-.backlog-item-title { min-width: 0; display: flex; align-items: center; gap: var(--wb-space-2); }
+.backlog-item-title { min-width: 0; height: 100%; display: flex; align-items: center; gap: var(--wb-space-2); }
+/* A definite height basis for the percentage heights below. Inside a
+   table-cell whose height is content-driven, `height: 100%` on the title only
+   resolves when the Item cell itself sets the row height — a row forced taller
+   by a sibling column (a wrapped labels chip list) would leave the guide
+   spacers short of the row. `height` on a table-cell is a floor, not a cap:
+   rows still grow with their content. */
+.backlog-table td { height: 1px; }
 /* One spacer per ancestor level. Nesting is unbounded, so indentation is built
-   from repeated token-width spacers rather than a per-element custom property. */
-.backlog-indent { width: var(--wb-space-4); flex: 0 0 var(--wb-space-4); align-self: stretch; }
+   from repeated token-width spacers rather than a per-element custom property.
+   Each spacer also draws the tree's dotted guide line at its own left edge,
+   which puts it directly under the ancestor's toggle: the handle leads the row
+   so the guides align with the chevron column above them. The negative block
+   margins stretch the spacer across the cell's own vertical padding, so
+   consecutive child rows' lines join instead of breaking at the row border. */
+.backlog-indent {
+  width: var(--wb-space-4);
+  flex: 0 0 var(--wb-space-4);
+  align-self: stretch;
+  margin-block: calc(var(--wb-space-2) * -1);
+  border-left: 1px dotted var(--wb-color-border-default);
+}
 /* Shared title-link treatment. The wrap mode is NOT set here: a backlog title
    and a relationship title live in very different column widths, so each sets
    its own (`.backlog-item-title a` and `.relationship-row a` below). Two
@@ -636,7 +654,7 @@ main.content { padding-top: var(--wb-space-5); }
   .backlog-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
   .backlog-table tbody { display: grid; gap: var(--wb-space-2); }
   .backlog-table tr { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--wb-space-2) var(--wb-space-3); padding: var(--wb-space-3); border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-medium); background: var(--wb-color-surface-raised); box-shadow: var(--wb-shadow-small); }
-  .backlog-table td { min-width: 0; display: block; padding: 0; border: 0; }
+  .backlog-table td { min-width: 0; display: block; height: auto; padding: 0; border: 0; }
   .backlog-move-controls { min-width: 0; flex-wrap: wrap; }
   .backlog-table td::before { content: attr(data-label); display: block; color: var(--wb-color-fg-muted); font-size: .6875rem; font-weight: var(--wb-font-weight-semibold); letter-spacing: .04em; text-transform: uppercase; }
   .backlog-table .backlog-item-cell { grid-column: 1 / -1; }
@@ -657,7 +675,7 @@ main.content { padding-top: var(--wb-space-5); }
      title would be noise rather than a field label. */
   .backlog-table .backlog-item-cell::before { display: none; }
   .backlog-table td[data-label="Labels"]:has(> .backlog-labels:empty) { display: none; }
-  .backlog-indent { width: var(--wb-space-3); flex-basis: var(--wb-space-3); }
+  .backlog-indent { width: var(--wb-space-3); flex-basis: var(--wb-space-3); margin-block: 0; border-left: 0; }
   .backlog-toggle, .backlog-toggle-spacer { width: 2.75rem; height: 2.75rem; flex-basis: 2.75rem; }
   .backlog-empty-row { display: block; }
   .backlog-empty-row td { display: block; padding: 0; }

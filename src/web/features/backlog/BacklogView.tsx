@@ -39,6 +39,16 @@ function subTaskCount(count: number): string {
   return `${count} ${count === 1 ? "sub-task" : "sub-tasks"}`;
 }
 
+/**
+ * DOM id of one row. Child rows carry it because they are the regions their
+ * parent's disclosure toggle names in `aria-controls`: the rows exist only
+ * while the parent is expanded, which is exactly when they exist to be
+ * controlled.
+ */
+function backlogRowDomId(id: number): string {
+  return `backlog-children-${id}`;
+}
+
 interface DragState {
   readonly itemId: number;
   /** Row the pointer is over, and whether it would nest inside it. */
@@ -137,6 +147,7 @@ function BacklogRows({
     <>
       <tr
         ref={rowRef}
+        id={level > 1 ? backlogRowDomId(item.id) : undefined}
         class={`${level > 1 ? "backlog-child-row" : ""}${isDragging ? " backlog-dragging" : ""}${isDropRow ? (dragging.nested ? " backdrop-into" : " backdrop-before") : ""}${optimisticId === item.id ? " backlog-optimistic" : ""}`.trim()}
         aria-level={level}
         data-row-id={String(item.id)}
@@ -181,7 +192,11 @@ function BacklogRows({
       >
         <td class="backlog-item-cell" data-label="Item">
           <div class="backlog-item-title">
-            {Array.from({ length: depth - 1 }, (_, index) => <span class="backlog-indent" key={index} aria-hidden="true" />)}
+            {/* The handle leads so every row's grip sits in one shared
+                column, root or child, and the guide spacers follow it: one
+                per ancestor level, each carrying the tree's dotted guide line
+                directly under the ancestor's toggle. Indentation and
+                hierarchy come from the same repeated element. */}
             {/* The handle is a focusable, labelled control rather than a
                 decorative grip: dragging is one way to move a row, and the
                 buttons beside it are the other. */}
@@ -208,16 +223,16 @@ function BacklogRows({
             >
               <span aria-hidden="true">{"\u22ee\u22ee"}</span>
             </span>
+            {Array.from({ length: depth - 1 }, (_, index) => <span class="backlog-indent" key={index} aria-hidden="true" />)}
             {hasChildren ? (
               <button
                 class="backlog-toggle"
                 type="button"
                 aria-expanded={isExpanded}
-                /* Points at the region the toggle actually controls, so the
-                   disclosure is announced as a relationship and not just a
-                   state. The region is rendered only while expanded, which is
-                   exactly when it exists to be controlled. */
-                aria-controls={hasChildren ? `backlog-children-${item.id}` : undefined}
+                /* Names the rows this disclosure reveals — one id per direct
+                   child, since each row is its own region once the tree is a
+                   flat list of sibling rows. */
+                aria-controls={isExpanded ? children.map((child) => backlogRowDomId(child.item.id)).join(" ") : undefined}
                 aria-label={`${isExpanded ? "Collapse" : "Expand"} ${item.title} (${subTaskCount(children.length)})`}
                 onClick={() => onToggle(item.id)}
               >
@@ -238,29 +253,27 @@ function BacklogRows({
           {actions.some((action) => action.id === "root") ? null : <span class="sr-only">This item cannot be moved to the top level.</span>}
         </td>
       </tr>
-      {/* One wrapper element per expanded parent, so the toggle's aria-controls
-          resolves to a real node. A <tbody> can hold it without disturbing the
-          table layout. */}
-      {isExpanded ? (
-        <tbody id={`backlog-children-${item.id}`}>
-          {children.map((child) => (
-            <BacklogRows
-              key={child.item.id}
-              node={child}
-              level={level + 1}
-              expanded={expanded}
-              targets={targets}
-              dragging={dragging}
-              busy={busy}
-              optimisticId={optimisticId}
-              onToggle={onToggle}
-              onMove={onMove}
-              onRefuse={onRefuse}
-              onDragStateChange={onDragStateChange}
-            />
-          ))}
-        </tbody>
-      ) : null}
+      {/* Child rows are plain siblings of their parent inside the one
+          <tbody>. A <tbody> nested inside a <tbody> is invalid HTML, and
+          browsers lay such a group's rows out with their own column widths —
+          which is how the child rows once ended up as a misaligned sub-table
+          instead of rows of the one shared grid. */}
+      {isExpanded ? children.map((child) => (
+        <BacklogRows
+          key={child.item.id}
+          node={child}
+          level={level + 1}
+          expanded={expanded}
+          targets={targets}
+          dragging={dragging}
+          busy={busy}
+          optimisticId={optimisticId}
+          onToggle={onToggle}
+          onMove={onMove}
+          onRefuse={onRefuse}
+          onDragStateChange={onDragStateChange}
+        />
+      )) : null}
     </>
   );
 }
