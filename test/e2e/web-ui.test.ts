@@ -448,9 +448,98 @@ describe("web UI in a real browser", () => {
     expect(detail.comments.some((comment) => comment.body.includes("@ada"))).toBe(true);
     expect(detail.history.some((entry) => entry.field === "title")).toBe(true);
     // The history is the audit trail of the rename the user just made.
+    await page.click("#detail-tab-2");
     await page.waitFor(`document.querySelector(".detail-history").textContent.includes("title")`, {
       description: "the title change in history",
     });
+    expect(await page.count('.detail-history button[aria-expanded="true"]')).toBe(0);
+    await page.click(".detail-history .history-entry");
+    expect(await page.count('.detail-history button[aria-expanded="true"]')).toBe(1);
+    await expectNoProblems();
+  }, 60_000);
+
+  test("detail: compact tabs, links dialog, collapsed history and mobile layout", async () => {
+    if (skipWithoutChromium()) return;
+    const { item: created } = await board.request<{ item: { id: number } }>("/api/items", { method: "POST", body: JSON.stringify({ title: "Compact detail fixture", body: "Short description." }) });
+    const target = await board.itemIdByTitle("Filter the backlog by label");
+    await page.setViewport(1440, 900);
+    await signIn(page, board, `#/item/${created.id}`);
+    await page.waitFor(`document.querySelector('#detail-title') !== null`, { description: "compact details" });
+    expect(await page.evaluate<string>(`document.querySelector('#detail-tab-0').getAttribute('aria-selected')`)).toBe("true");
+    expect(await page.count(".relationship-group")).toBe(0);
+    expect(await page.text(".detail-relationships")).toContain("No links.");
+    expect(await page.evaluate<boolean>(`(() => {
+      const body = document.querySelector('.detail-body').getBoundingClientRect();
+      const composer = document.querySelector('.composer').getBoundingClientRect();
+      const links = document.querySelector('.detail-relationships').getBoundingClientRect();
+      return composer.top - body.bottom < 40 && links.left > body.right;
+    })()`)).toBe(true);
+    await page.fill("#detail-comment", "Draft survives switching tabs");
+    await page.press("#detail-tab-0", "ArrowRight");
+    expect(await page.evaluate<string>(`document.activeElement.id`)).toBe("detail-tab-1");
+    await page.press("#detail-tab-1", "End");
+    expect(await page.evaluate<boolean>(`document.querySelector('#detail-panel-2').hidden`)).toBe(false);
+    expect(await page.count('.detail-history button[aria-expanded="true"]')).toBe(0);
+    await page.click("#detail-tab-0");
+    expect(await page.evaluate<string>(`document.querySelector('#detail-comment').value`)).toBe("Draft survives switching tabs");
+
+    await page.click(".detail-add-link");
+    expect(await page.evaluate<boolean>(`document.querySelector('.link-dialog').open`)).toBe(true);
+    await page.press("#detail-relationship-name", "Escape");
+    await page.waitFor(`!document.querySelector('.link-dialog').open`, { description: "dialog dismissed" });
+    await page.waitFor(`document.activeElement.classList.contains('detail-add-link')`, { description: "focus returned to add link" });
+    await page.click(".detail-add-link");
+    await page.fill("#detail-relationship-item-id", String(target));
+    await page.click(".link-dialog button[type=submit]");
+    await page.waitFor(`!document.querySelector('.link-dialog').open && document.querySelector('.relationship-related a') !== null`, { description: "added link and closed dialog" });
+    expect(await page.count(".relationship-group")).toBe(1);
+    await page.click(".relationship-remove");
+    await page.waitFor(`document.querySelectorAll('.relationship-group').length === 0`, { description: "removed link" });
+
+    // A pending request cannot dismiss the dialog; failure keeps its draft.
+    await page.evaluate(`(() => {
+      const original = window.fetch;
+      window.fetch = (url, init) => {
+        if (String(url).endsWith('/relationships') && init?.method === 'POST') {
+          return new Promise(resolve => { window.__finishLink = () => {
+            window.fetch = original;
+            resolve(new Response(JSON.stringify({ error: { code: 'VALIDATION', message: 'Rejected link' } }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+          }; });
+        }
+        return original(url, init);
+      };
+    })()`);
+    await page.click(".detail-add-link");
+    await page.fill("#detail-relationship-item-id", String(target));
+    await page.click(".link-dialog button[type=submit]");
+    await page.waitFor(`typeof window.__finishLink === 'function'`, { description: "pending link request" });
+    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Close add link"]').disabled`)).toBe(true);
+    await page.press("#detail-relationship-name", "Escape");
+    expect(await page.evaluate<boolean>(`document.querySelector('.link-dialog').open`)).toBe(true);
+    await page.evaluate(`window.__finishLink()`);
+    await page.waitFor(`document.querySelector('.link-dialog .error-banner') !== null`, { description: "inline link failure" });
+    expect(await page.text(".link-dialog .error-banner")).toContain("Check the item ID");
+    expect(await page.evaluate<string>(`document.querySelector('#detail-relationship-item-id').value`)).toBe(String(target));
+    await page.click('[aria-label="Close add link"]');
+
+    // A long links column cannot create a blank gap before the composer.
+    for (let i = 0; i < 8; i++) {
+      await board.request("/api/items", { method: "POST", body: JSON.stringify({ title: `Child ${i}`, parentId: created.id, type: "task" }) });
+    }
+    await page.waitFor(`document.querySelectorAll('.relationship-list li').length === 8`, { description: "tall links column" });
+    expect(await page.evaluate<boolean>(`document.querySelector('.composer').getBoundingClientRect().top - document.querySelector('.detail-body').getBoundingClientRect().bottom < 40`)).toBe(true);
+    if (process.env["WORKBOARD_UI_SHOTS"]) await Bun.write(join(process.env["WORKBOARD_UI_SHOTS"], "detail-desktop.png"), await page.screenshot());
+    for (const width of [421, 360]) {
+      await page.setViewport(width, 900);
+      await page.waitFor(`window.innerWidth === ${width}`, { description: "mobile viewport" });
+      expect(await page.evaluate<Array<{ tag: string; class: string; right: number; left: number }>>(`Array.from(document.querySelectorAll('body *')).filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > document.documentElement.clientWidth + 1 || r.left < -1); }).map(el => ({ tag: el.tagName, class: el.className, right: el.getBoundingClientRect().right, left: el.getBoundingClientRect().left }))`)).toEqual([]);
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer').getBoundingClientRect().top - document.querySelector('.detail-body').getBoundingClientRect().bottom < 40`)).toBe(true);
+      await page.click(".detail-add-link");
+      expect(await page.evaluate<boolean>(`(() => { const r = document.querySelector('.link-dialog').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })()`)).toBe(true);
+      if (process.env["WORKBOARD_UI_SHOTS"]) await Bun.write(join(process.env["WORKBOARD_UI_SHOTS"], `detail-mobile-${width}.png`), await page.screenshot());
+      await page.click('[aria-label="Close add link"]');
+      if (process.env["WORKBOARD_UI_SHOTS"]) await Bun.write(join(process.env["WORKBOARD_UI_SHOTS"], `detail-mobile-closed-${width}.png`), await page.screenshot());
+    }
     await expectNoProblems();
   }, 60_000);
 
@@ -475,6 +564,8 @@ describe("web UI in a real browser", () => {
     if (skipWithoutChromium()) return;
     const id = await board.itemIdByTitle("Filter the backlog by label");
     await signIn(page, board, `#/item/${id}`);
+    await page.waitFor(`document.querySelector("#detail-tab-1") !== null`, { description: "the detail tabs" });
+    await page.click("#detail-tab-1");
     await page.waitFor(`document.querySelector("#attachments-heading") !== null`, { description: "the attachments panel" });
 
     // A picked file uploads and appears in the list with its real size.
@@ -485,6 +576,12 @@ describe("web UI in a real browser", () => {
     expect(await page.text(".attachment-row")).toContain("picked shot.png");
     expect(await page.text(".attachment-row")).toContain("335 B");
 
+    await page.waitFor(`(() => { const img = document.querySelector('.attachment-thumbnail img'); return img && img.complete && img.naturalWidth > 0; })()`, { description: "the gallery thumbnail" });
+    await page.click("#detail-tab-0");
+    const thumbnailUrl = await page.evaluate<string>(`document.querySelector('.attachment-thumbnail img').src`);
+    await page.click("#detail-tab-1");
+    expect(await page.evaluate<string>(`document.querySelector('.attachment-thumbnail img').src`)).toBe(thumbnailUrl);
+    await page.click("#detail-tab-0");
     // Pasting into the comment box uploads and appends the markdown reference.
     expect(await page.evaluate<string>(pasteFilesScript("#detail-comment", [
       { name: "clip.png", type: "image/png", base64: FIXTURE_PNG_BASE64 },
@@ -495,6 +592,7 @@ describe("web UI in a real browser", () => {
     );
 
     // An unsupported type is refused immediately, in the page, with a reason.
+    await page.click("#detail-tab-1");
     expect(await page.evaluate<string>(selectFilesScript("#detail-attachment-input", [
       { name: "evil.svg", type: "image/svg+xml", base64: "PHN2Zy8+" },
     ]))).toBe("selected");
@@ -508,6 +606,8 @@ describe("web UI in a real browser", () => {
     if (skipWithoutChromium()) return;
     const id = await board.itemIdByTitle("Filter the backlog by label");
     await signIn(page, board, `#/item/${id}`);
+    await page.waitFor(`document.querySelector("#detail-tab-1") !== null`, { description: "the detail tabs" });
+    await page.click("#detail-tab-1");
     await page.waitFor(`document.querySelector("#attachments-heading") !== null`, { description: "the attachments panel" });
 
     // Add a file, then insert its reference into the description.
@@ -516,6 +616,7 @@ describe("web UI in a real browser", () => {
     ]))).toBe("selected");
     await page.waitFor(`document.querySelector(".attachment-row") !== null`, { description: "the attachment row" });
 
+    await page.click("#detail-tab-0");
     await page.click("#body-tab-edit");
     await page.evaluate(pasteFilesScript("#detail-body-input", [
       { name: "inline.png", type: "image/png", base64: FIXTURE_PNG_BASE64 },

@@ -935,22 +935,25 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
 
   // --- relationships ---------------------------------------------------------
 
-  const setParent = useCallback((parentId: number | null): void => {
-    if (id === null || !active() || relationshipsBusy) return;
+  const setParent = useCallback(async (parentId: number | null): Promise<boolean> => {
+    if (id === null || !active() || relationshipsBusy) return false;
     setRelationshipsBusy(true);
-    void api.updateItem(id, { parentId }).then(() => {
-      if (!active()) return;
+    try {
+      await api.updateItem(id, { parentId });
+      if (!active()) return false;
       markApplied("item");
       setNotice(parentId === null ? "Parent removed." : `Parent set to item #${parentId}.`);
-      void refresh(true);
-    }).catch((caught: unknown) => {
-      if (!active() || failAuthentication(caught)) return;
+      await refresh(true);
+      return true;
+    } catch (caught: unknown) {
+      if (!active() || failAuthentication(caught)) return false;
       setNotice(caught instanceof apiModule.ApiError && caught.status === 400
         ? caught.message
         : DETAIL_SAVE_ERROR);
-    }).finally(() => {
+      return false;
+    } finally {
       if (active()) setRelationshipsBusy(false);
-    });
+    }
   }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
 
   const createSubtask = useCallback(async (title: string): Promise<boolean> => {
@@ -973,18 +976,21 @@ export function useDetail({ params, refreshGeneration, onAuthenticationFailure }
     }
   }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
 
-  const addRelationship = useCallback((name: "related" | "predecessor" | "successor" | "duplicate" | "duplicate_of", itemId: number): void => {
-    if (id === null || !active() || relationshipsBusy) return;
+  const addRelationship = useCallback(async (name: "related" | "predecessor" | "successor" | "duplicate" | "duplicate_of", itemId: number): Promise<boolean> => {
+    if (id === null || !active() || relationshipsBusy) return false;
     setRelationshipsBusy(true);
-    void api.addRelationship(id, { name, itemId }).then(() => {
-      if (!active()) return;
+    try {
+      await api.addRelationship(id, { name, itemId });
+      if (!active()) return false;
       markApplied("item");
       setNotice("Relationship added.");
-      void refresh(true);
-    }).catch((caught: unknown) => {
-      if (!active() || failAuthentication(caught)) return;
+      await refresh(true);
+      return true;
+    } catch (caught: unknown) {
+      if (!active() || failAuthentication(caught)) return false;
       setNotice(caught instanceof apiModule.ApiError ? caught.message : DETAIL_SAVE_ERROR);
-    }).finally(() => { if (active()) setRelationshipsBusy(false); });
+      return false;
+    } finally { if (active()) setRelationshipsBusy(false); }
   }, [active, failAuthentication, id, markApplied, refresh, relationshipsBusy, setNotice]);
 
   const removeRelationship = useCallback((relationshipId: number): void => {

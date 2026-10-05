@@ -79,7 +79,9 @@ run from source with `bun run dev` (watch mode).
 Every command accepts a data directory via `--dir <path>` (alias `--data`)
 or the `WORKBOARD_DATA_DIR` env var; the default is `./workboard-data`.
 The database is one SQLite file, created and migrated on demand — an
-explicit `init` is optional but recommended.
+explicit `init` is optional but recommended. Opening a data directory also
+creates a `.gitignore` for its runtime database, locks, generated storage configuration, and default attachment
+blobs. Existing `.gitignore` files are left unchanged.
 
 ---
 
@@ -120,9 +122,12 @@ Serve the app (§9), then open the URL in a browser.
 - **List view** — filter by status, assignee, and label; free-text search;
   cursor-paginated (a "load more"/cursor link appears when more pages
   exist); select multiple items for **bulk assign**.
-- **Item detail** — full markdown body (rendered safely), comments with an
-  @mention composer (autocomplete of participant names), and the change
-  history.
+- **Item detail** — **Details** shows the markdown description, comments with
+  @mention autocomplete, and a compact links list. **Add link** opens a dialog
+  for relationships, a parent, or a new child. **Attachments** lists images/videos
+  with lazy previews for images up to 4 MiB; larger images and videos open on demand.
+  **History** shows changes, collapsed until expanded. Type, status,
+  priority, and assignee stay below the title; labels expand on demand.
 - **Live updates** — the open page subscribes to `/api/events` (SSE) and
   updates itself when anyone (human or agent, over any transport) changes
   something. No refresh needed; keep it open on a secondary screen.

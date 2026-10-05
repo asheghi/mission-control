@@ -269,9 +269,9 @@ export interface DetailState {
   readonly setBodyFocused: (focused: boolean) => void;
   readonly setBodyTab: (tab: BodyTab) => void;
   readonly patchField: (patch: { status?: WorkStatus; type?: WorkItemType; priority?: Priority; assigneeId?: number | null }) => void;
-  readonly setParent: (parentId: number | null) => void;
+  readonly setParent: (parentId: number | null) => Promise<boolean>;
   readonly createSubtask: (title: string) => Promise<boolean>;
-  readonly addRelationship: (name: Exclude<ItemRelationshipName, "parent" | "child">, itemId: number) => void;
+  readonly addRelationship: (name: Exclude<ItemRelationshipName, "parent" | "child">, itemId: number) => Promise<boolean>;
   readonly removeRelationship: (relationshipId: number) => void;
   readonly setLabelDraft: (value: string) => void;
   readonly addLabel: (name: string) => void;

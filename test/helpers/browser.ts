@@ -242,6 +242,8 @@ export interface Page {
   click(selector: string): Promise<void>;
   fill(selector: string, value: string): Promise<void>;
   select(selector: string, value: string): Promise<void>;
+  setViewport(width: number, height: number): Promise<void>;
+  screenshot(): Promise<Uint8Array>;
   focus(selector: string): Promise<void>;
   blur(selector: string): Promise<void>;
   press(selector: string, key: string): Promise<void>;
@@ -475,6 +477,15 @@ class CdpPage implements Page {
 
   async select(selector: string, value: string): Promise<void> {
     await this.evaluate(`__wb.select(${JSON.stringify(selector)}, ${JSON.stringify(value)})`);
+  }
+
+  async setViewport(width: number, height: number): Promise<void> {
+    await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  }
+
+  async screenshot(): Promise<Uint8Array> {
+    const result = await this.send("Page.captureScreenshot", { format: "png" });
+    return Buffer.from(result["data"] as string, "base64");
   }
 
   async focus(selector: string): Promise<void> {

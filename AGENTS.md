@@ -44,6 +44,16 @@ bun run dev:board
 - `bun run dev:board -- --seed` fills the board with development data first
   (see "Development seed" below).
 
+`bun run dev:link` is the companion for when the server is already running: it
+prints a fresh `dev-bootstrap` login link for the running board and exits;
+with nothing serving it hands off to `dev:board` (same flags). It only prints
+a link after the server on that port accepts a token minted from the data
+directory and returns a valid participant envelope. Anonymous success and
+redirects are refused; a live serve lock with a silent port, or a listener that
+refuses the token, fails with a diagnostic instead. This is a local development
+sanity check, not authentication of a hostile server. Flags are the same as
+`dev:board`'s; dev scripts require a fixed port in 1–65535 (not port 0).
+
 ## Tokens
 
 - Sign-in uses a token in the URL fragment (`/#token=wb_...`). The browser

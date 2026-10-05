@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { InternalError } from "../domain/errors";
 import { migrate } from "./migrate";
@@ -7,6 +7,32 @@ import { migrations } from "./schema";
 
 const DATABASE_FILE_NAME = "workboard.sqlite";
 const BUSY_TIMEOUT_MS = 5000;
+// The data directory can also be a source checkout (dev:board). Only ignore
+// Workboard's own runtime paths at its root, never the whole directory.
+const DATA_GITIGNORE = [
+  "# Workboard runtime data",
+  "/workboard.sqlite",
+  "/workboard.sqlite-wal",
+  "/workboard.sqlite-shm",
+  "/workboard.sqlite-journal",
+  "/workboard.pid",
+  "/workboard.restore.lock",
+  "/workboard.storage.json",
+  "/workboard.storage.json.tmp-*",
+  "/blobs/",
+  "",
+].join("\n");
+
+function ensureDataGitignore(dataDir: string): void {
+  try {
+    // Exclusive creation preserves even an empty file or a symlink, and avoids
+    // a check-then-write race with another initializer or a user's editor.
+    writeFileSync(join(dataDir, ".gitignore"), DATA_GITIGNORE, { flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+    throw new InternalError(`Failed to create data directory .gitignore at ${dataDir}.`, { cause: error });
+  }
+}
 
 export function databaseFilePath(dataDir: string): string {
   return join(dataDir, DATABASE_FILE_NAME);
@@ -18,6 +44,8 @@ export function openDatabase(dataDir: string): Database {
   } catch (error) {
     throw new InternalError(`Failed to create data directory ${dataDir}.`, { cause: error });
   }
+
+  ensureDataGitignore(dataDir);
 
   const path = databaseFilePath(dataDir);
   let db: Database;

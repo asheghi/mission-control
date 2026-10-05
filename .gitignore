@@ -11,5 +11,10 @@ workboard
 *.db
 *.db-wal
 *.db-shm
-workboard-data/workboard.pid
+/workboard-data/
 /workboard.pid
+/workboard.restore.lock
+/workboard.storage.json
+/workboard.storage.json.tmp-*
+/blobs/
+*.sqlite-journal

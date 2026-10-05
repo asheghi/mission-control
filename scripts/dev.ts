@@ -25,143 +25,27 @@
 //
 // Treat any printed link as a secret: do not paste it into a chat, an issue, or
 // a screenshot.
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
-
-const ENTRY = resolve(import.meta.dir, "..", "src", "entry.ts");
-const BUN = process.execPath;
-
-interface Options {
-  readonly dataDir: string;
-  readonly participant: string;
-  readonly host: string;
-  readonly port: number;
-  readonly route: string;
-  /** Fill the board with development data before serving. */
-  readonly seed: boolean;
-}
-
-function parseOptions(argv: readonly string[]): Options {
-  const flags = new Map<string, string>();
-  const switches = new Set<string>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const token = argv[index];
-    if (token === undefined || !token.startsWith("--")) continue;
-    const next = argv[index + 1];
-    if (next !== undefined && !next.startsWith("--")) {
-      flags.set(token.slice(2), next);
-      index += 1;
-    } else {
-      switches.add(token.slice(2));
-    }
-  }
-  const port = Number(flags.get("port") ?? process.env.WORKBOARD_PORT ?? 8765);
-  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error(`invalid --port: ${flags.get("port")}`);
-  }
-  return {
-    // The current directory doubles as the data directory: `workboard.sqlite`
-    // and `workboard.pid` are created right here. Those files are gitignored
-    // (see .gitignore), so a checkout never shows the board in git. Pass
-    // `--dir <path>` to keep the board somewhere else.
-    dataDir: flags.get("dir") ?? process.cwd(),
-    participant: flags.get("as") ?? "dev",
-    host: flags.get("host") ?? "127.0.0.1",
-    port,
-    route: flags.get("route") ?? "#/backlog",
-    seed: switches.has("seed") || flags.has("seed"),
-  };
-}
-
-/** Run one CLI command against the dev data dir and capture stdout. */
-async function workboard(args: readonly string[]): Promise<string> {
-  const child = spawn(BUN, [ENTRY, ...args], { stdio: ["ignore", "pipe", "pipe"] });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  const code = await new Promise<number>((settle) => child.on("close", (value) => settle(value ?? 1)));
-  if (code !== 0) {
-    // stderr from the CLI is a human-readable diagnostic; the token is only ever
-    // read from stdout of `token create`, so echoing this cannot leak it.
-    throw new Error(`workboard ${args.join(" ")} failed (exit ${code})\n${stderr.trim()}`);
-  }
-  return stdout;
-}
+import { join } from "node:path";
+import { ENTRY, bootstrapBoard, parseOptions, printLoginBlock, runForeground } from "./dev-common";
 
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2));
-  const dataArgs = ["--data", options.dataDir];
-
   const fresh = !existsSync(join(options.dataDir, "workboard.sqlite"));
+  const token = await bootstrapBoard(options);
+  printLoginBlock(options, token, `workboard dev board${fresh ? " (new)" : ""}`);
 
-  // 1. Initialize (idempotent: applies pending migrations, seeds nothing else).
-  await workboard([...dataArgs, "init"]);
-
-  // 2. Ensure the participant exists. `participant add` fails on a duplicate, so
-  //    presence is checked first rather than treating the conflict as fatal.
-  //    `participant --json` prints a bare array of DTOs.
-  const roster = await workboard([...dataArgs, "--json", "participant"]);
-  const parsedRoster = JSON.parse(roster) as Array<{ name: string }> | { participants?: Array<{ name: string }> };
-  const entries = Array.isArray(parsedRoster) ? parsedRoster : parsedRoster.participants ?? [];
-  const known = new Set(entries.map((entry) => entry.name.toLowerCase()));
-  if (!known.has(options.participant.toLowerCase())) {
-    await workboard([...dataArgs, "participant", "add", "--name", options.participant, "--kind", "human"]);
-  }
-
-  // 3. Optional development data. `--seed` is explicit opt-in and always
-  //    replaces what is there, because a board you have been working in is not
-  //    something a demo seed should quietly merge into.
-  if (options.seed) {
-    const seeded = await workboard([...dataArgs, "seed", "--reset"]);
-    console.log(seeded.trim());
-    console.log("");
-  }
-
-  // 4. Issue a token for that participant.
-  const issued = await workboard([
-    ...dataArgs,
-    "--json",
-    "token",
-    "create",
-    "--participant",
-    options.participant,
-    "--name",
-    "dev-bootstrap",
+  // Serve in the foreground, inheriting stdio so Ctrl-C behaves normally.
+  await runForeground([
+    ENTRY,
+    "serve",
+    "--data",
+    options.dataDir,
+    "--host",
+    options.host,
+    "--port",
+    String(options.port),
   ]);
-  const token = (JSON.parse(issued) as { token?: string }).token;
-  if (token === undefined || token === "") {
-    throw new Error("token create did not return a token");
-  }
-
-  const origin = `http://${options.host}:${options.port}`;
-  const loginUrl = `${origin}/#token=${token}${options.route.startsWith("#") ? options.route : `#${options.route}`}`;
-
-  console.log("");
-  console.log(`  workboard dev board${fresh ? " (new)" : ""}`);
-  console.log(`  data    ${options.dataDir}`);
-  console.log(`  as      ${options.participant}`);
-  console.log("");
-  console.log("  Open this URL — it signs you in and then removes the token from the address bar:");
-  console.log("");
-  console.log(`    ${loginUrl}`);
-  console.log("");
-  console.log("  Plain URL (signs in with the token already in this browser):");
-  console.log(`    ${origin}/`);
-  console.log("");
-  console.log("  This link is a live credential. Revoke it with:");
-  console.log(`    bun run workboard -- --data ${options.dataDir} token revoke --id <token-id>`);
-  console.log("");
-
-  // 5. Serve in the foreground, inheriting stdio so Ctrl-C behaves normally.
-  const server = spawn(
-    BUN,
-    [ENTRY, "serve", ...dataArgs, "--host", options.host, "--port", String(options.port)],
-    { stdio: "inherit" },
-  );
-  const code = await new Promise<number>((settle) => server.on("close", (value) => settle(value ?? 0)));
-  process.exitCode = code;
 }
 
 await main();

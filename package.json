@@ -11,6 +11,7 @@
     "build:web": "bun run scripts/build-web.ts",
     "dev": "bun run build:web && bun --watch src/entry.ts",
     "dev:board": "bun run build:web && bun run scripts/dev.ts",
+    "dev:link": "bun run scripts/dev-link.ts",
     "workboard": "bun run src/entry.ts",
     "seed": "bun run src/entry.ts seed",
     "typecheck": "bun run build:web && tsc --noEmit",
