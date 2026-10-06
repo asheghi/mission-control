@@ -7,6 +7,7 @@ import { initializeTheme } from "./theme";
 import "./features/backlog";
 import "./features/board";
 import "./features/list";
+import "./features/mine";
 import "./features/detail";
 import { App } from "./app";
 

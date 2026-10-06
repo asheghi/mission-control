@@ -14,9 +14,9 @@
 // The browser is skipped, loudly, when this machine has no Chromium: set
 // `WORKBOARD_CHROME` to point at one.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Browser, Page } from "../helpers/browser";
 import { findChromium, launchBrowser } from "../helpers/browser";
 
@@ -263,7 +263,7 @@ describe("web UI in a real browser", () => {
     expect(await page.evaluate<string | null>(`localStorage.getItem("workboard.token")`)).toBe(board.token);
 
     expect(await page.text(".brand")).toContain("MissionControl");
-    expect(await page.allText(`nav[aria-label="Primary navigation"] a`)).toEqual(["Backlog", "Board", "All work"]);
+    expect(await page.allText(`nav[aria-label="Primary navigation"] a`)).toEqual(["Backlog", "Board", "All work", "My work"]);
     expect(await page.count(".live-indicator")).toBe(1);
     // The shell marks the current page, so the URL and the navigation agree.
     expect(await page.text(`nav[aria-label="Primary navigation"] a[aria-current="page"]`)).toBe("Backlog");
@@ -351,6 +351,51 @@ describe("web UI in a real browser", () => {
     );
     const after = await board.request<{ item: { status: string } }>(`/api/items/${id}`);
     expect(after.item.status, "the card moved on screen but not on the server").toBe("doing");
+    await expectNoProblems();
+  }, 60_000);
+
+  test("board: moving a card on mobile switches to its lane before restoring focus", async () => {
+    if (skipWithoutChromium()) return;
+    const { item } = await board.request<{ item: { id: number } }>("/api/items", {
+      method: "POST", body: JSON.stringify({ title: "Mobile move focus fixture" }),
+    });
+    await page.setViewport(390, 844);
+    await signIn(page, board, "#/board");
+    await page.waitFor(`document.querySelector('.board[data-mobile-status="todo"] .board-card[data-id="${item.id}"]') !== null`, {
+      description: "the mobile fixture card in To do",
+    });
+
+    await page.focus(`.board-card[data-id="${item.id}"] select`);
+    await page.select(`.board-card[data-id="${item.id}"] select`, "doing");
+    await page.waitFor(`document.querySelector('.board-card[data-id="${item.id}"]')?.dataset.status === "doing"`, { description: "updated card" });
+    expect(await page.evaluate<boolean>(`(() => {
+      const card = document.querySelector('.board-card[data-id="${item.id}"]');
+      const control = card?.querySelector('[data-focus-target="status"]');
+      return card !== null && control !== null && getComputedStyle(card.closest('.board-column')).display !== 'none' &&
+        control === document.activeElement && control.getBoundingClientRect().width > 0;
+    })()`)).toBe(true);
+    expect((await board.request<{ item: { status: string } }>(`/api/items/${item.id}`)).item.status).toBe("doing");
+    await expectNoProblems();
+  }, 60_000);
+
+  test("board mobile status switcher exposes each lane without page overflow", async () => {
+    if (skipWithoutChromium()) return;
+    await page.setViewport(390, 844);
+    await signIn(page, board, "#/board");
+    await page.waitFor(`document.querySelectorAll('.board-status-button').length === 4`, { description: "mobile status switcher" });
+    await page.waitFor(`document.querySelector('.board-column[data-status="todo"]') !== null`, { description: "To do column" });
+
+    for (const status of ["doing", "blocked"] as const) {
+      await page.click(`.board-status-button[data-status="${status}"]`);
+      await page.waitFor(
+        `document.querySelector('.board[data-mobile-status="${status}"] .board-column[data-status="${status}"]') !== null &&
+         getComputedStyle(document.querySelector('.board-column[data-status="${status}"]')).display !== 'none'`,
+        { description: `${status} column` },
+      );
+      expect(await page.evaluate<string>(`document.querySelector('.board-status-button[aria-pressed="true"]').textContent.trim().toLowerCase().startsWith("${status}") ? "${status}" : "wrong"`)).toBe(status);
+      expect(await page.evaluate<number>(`document.documentElement.scrollWidth`)).toBeLessThanOrEqual(390);
+    }
+    expect(await page.evaluate<number>(`document.documentElement.scrollWidth`)).toBeLessThanOrEqual(390);
     await expectNoProblems();
   }, 60_000);
 
@@ -458,6 +503,40 @@ describe("web UI in a real browser", () => {
     await expectNoProblems();
   }, 60_000);
 
+  test("detail comments disclose older comments in chronological, keyboard-accessible batches", async () => {
+    if (skipWithoutChromium()) return;
+    const { item } = await board.request<{ item: { id: number } }>("/api/items", {
+      method: "POST", body: JSON.stringify({ title: "Long comment thread", body: "Thread fixture." }),
+    });
+    for (let index = 1; index <= 23; index += 1) {
+      await board.request(`/api/items/${item.id}/comments`, {
+        method: "POST", body: JSON.stringify({ body: `Thread comment ${String(index).padStart(2, "0")}` }),
+      });
+    }
+    const thread = await board.request<{ comments: { body: string }[] }>(`/api/items/${item.id}`);
+    expect(thread.comments).toHaveLength(23);
+    await signIn(page, board, `#/item/${item.id}`);
+    await page.waitFor(`document.querySelector("#detail-title") !== null`, { description: "the comment thread detail view" });
+    await page.waitFor(`document.querySelector(".detail-comments") !== null`, { description: "the comment thread" });
+    expect(await page.count(".detail-comments .comment")).toBe(10);
+    expect(await page.text(".detail-comments")).toContain("Thread comment 14");
+    expect(await page.text(".detail-comments")).toContain("Thread comment 23");
+    expect(await page.text(".detail-comments")).not.toContain("Thread comment 13");
+    expect(await page.evaluate<string[]>(`Array.from(document.querySelectorAll(".detail-comments .comment")).map((node) => node.textContent.match(/Thread comment \\d+/)[0])`))
+      .toEqual(Array.from({ length: 10 }, (_, index) => `Thread comment ${String(index + 14).padStart(2, "0")}`));
+
+    await page.focus(".show-older-comments");
+    await page.press(".show-older-comments", "Enter");
+    await page.waitFor(`document.querySelectorAll(".detail-comments .comment").length === 20`, { description: "the next older batch" });
+    expect(await page.evaluate<string>(`document.querySelector(".detail-comments [role=status]").textContent`)).toBe("Showing 10 older comments.");
+    expect(await page.evaluate<string[]>(`Array.from(document.querySelectorAll(".detail-comments .comment")).map((node) => node.textContent.match(/Thread comment \\d+/)[0])`))
+      .toEqual(Array.from({ length: 20 }, (_, index) => `Thread comment ${String(index + 4).padStart(2, "0")}`));
+    await page.click(".show-older-comments");
+    await page.waitFor(`document.querySelectorAll(".detail-comments .comment").length === 23`, { description: "the remaining comments" });
+    expect(await page.count(".show-older-comments")).toBe(0);
+    await expectNoProblems();
+  }, 60_000);
+
   test("detail: compact tabs, links dialog, collapsed history and mobile layout", async () => {
     if (skipWithoutChromium()) return;
     const { item: created } = await board.request<{ item: { id: number } }>("/api/items", { method: "POST", body: JSON.stringify({ title: "Compact detail fixture", body: "Short description." }) });
@@ -528,7 +607,6 @@ describe("web UI in a real browser", () => {
     }
     await page.waitFor(`document.querySelectorAll('.relationship-list li').length === 8`, { description: "tall links column" });
     expect(await page.evaluate<boolean>(`document.querySelector('.composer').getBoundingClientRect().top - document.querySelector('.detail-body').getBoundingClientRect().bottom < 40`)).toBe(true);
-    if (process.env["WORKBOARD_UI_SHOTS"]) await Bun.write(join(process.env["WORKBOARD_UI_SHOTS"], "detail-desktop.png"), await page.screenshot());
     for (const width of [421, 360]) {
       await page.setViewport(width, 900);
       await page.waitFor(`window.innerWidth === ${width}`, { description: "mobile viewport" });
@@ -645,6 +723,79 @@ describe("web UI in a real browser", () => {
     expect(rendered.width).toBe(32);
     expect(rendered.height).toBe(32);
 
+    await expectNoProblems();
+  }, 60_000);
+
+  test("my work: shows assigned and mentioned items and opens item details", async () => {
+    if (skipWithoutChromium()) return;
+    const participants = await board.request<{ id: number; name: string }[]>("/api/participants");
+    const ada = participants.find((participant) => participant.name.toLowerCase() === "ada");
+    expect(ada).toBeDefined();
+    const assignedTitle = "My work assigned triage fixture";
+    const mentionedTitle = "My work mention triage fixture";
+    const assigned = await board.request<{ item: { id: number } }>("/api/items", {
+      method: "POST", body: JSON.stringify({ title: assignedTitle, assigneeId: ada!.id }),
+    });
+    const mentioned = await board.request<{ item: { id: number } }>("/api/items", {
+      method: "POST", body: JSON.stringify({ title: mentionedTitle }),
+    });
+    await board.request(`/api/items/${mentioned.item.id}/comments`, {
+      method: "POST", body: JSON.stringify({ body: "For @ada: please review this fixture." }),
+    });
+
+    await signIn(page, board, "#/mine");
+    await page.waitFor(`document.querySelector('.mine-view') !== null`, { description: "the My work view" });
+    await page.waitFor(`document.querySelectorAll('.mine-list > li').length >= 2 || document.querySelector('.error-banner') !== null`, { description: "My work items or an error" });
+    expect(await page.count(".error-banner")).toBe(0);
+    expect(await page.text('nav[aria-label="Primary navigation"] a[aria-current="page"]')).toBe("My work");
+    expect(await page.text(`.mine-list li:has(a[href="#/item/${assigned.item.id}"])`)).toContain(assignedTitle);
+    expect(await page.text(`.mine-list li:has(a[href="#/item/${assigned.item.id}"]) .mine-reasons`)).toContain("Assigned");
+    expect(await page.text(`.mine-list li:has(a[href="#/item/${mentioned.item.id}"])`)).toContain(mentionedTitle);
+    expect(await page.text(`.mine-list li:has(a[href="#/item/${mentioned.item.id}"]) .mine-reasons`)).toContain("Mentioned");
+
+    // Hash-based filters are accepted as view state and retained by the shell.
+    await page.evaluate(`location.hash = "#/mine?status=done"`);
+    await page.waitFor(`location.hash === "#/mine?status=done"`, { description: "the status URL" });
+    await page.evaluate(`location.hash = "#/mine"`);
+    await page.waitFor(`document.querySelector('.mine-list a[href="#/item/${assigned.item.id}"]') !== null`, { description: "the restored My work list" });
+
+    await page.click(`.mine-list a[href="#/item/${assigned.item.id}"]`);
+    await page.waitFor(`location.hash === "#/item/${assigned.item.id}" && document.querySelector("#detail-title") !== null`, { description: "the assigned item detail" });
+    expect(await page.evaluate<string>(`document.querySelector("#detail-title").value`)).toBe(assignedTitle);
+    await expectNoProblems();
+  }, 60_000);
+
+  test("captures visual review pages when requested", async () => {
+    const configuredDir = process.env["WORKBOARD_VISUAL_REVIEW_DIR"];
+    if (configuredDir === undefined || configuredDir.trim() === "") return;
+    if (skipWithoutChromium()) return;
+
+    // Screens are taken only from this test's isolated seeded board. The output
+    // directory and filenames contain no participant token or sign-in URL.
+    const outputDir = resolve(REPO_ROOT, configuredDir);
+    mkdirSync(outputDir, { recursive: true });
+    const detailId = await board.itemIdByTitle("Filter the backlog by label");
+    const views = [
+      { name: "backlog", route: "#/backlog", ready: 'document.querySelectorAll(".backlog-table tr[data-row-id]").length > 0' },
+      { name: "my-work", route: "#/mine", ready: 'document.querySelectorAll(".mine-list > li").length > 0' },
+      { name: "board", route: "#/board", ready: 'document.querySelector(".board")?.getAttribute("aria-busy") === "false" && document.querySelectorAll(".board-column").length === 4' },
+      { name: "detail", route: `#/item/${detailId}`, ready: 'document.querySelector("#detail-title") !== null' },
+    ];
+    await signIn(page, board);
+    for (const theme of ["light", "dark"] as const) {
+      await page.evaluate(`localStorage.setItem("workboard.theme", ${JSON.stringify(theme)}); location.reload()`);
+      await page.waitFor(`document.documentElement.getAttribute("data-theme") === ${JSON.stringify(theme)}`, {
+        description: `${theme} visual-review theme`,
+      });
+      for (const [size, width, height] of [["desktop", 1440, 900], ["mobile", 390, 844]] as const) {
+        await page.setViewport(width, height);
+        for (const view of views) {
+          await page.evaluate(`location.hash = ${JSON.stringify(view.route)}`);
+          await page.waitFor(view.ready, { description: `${view.name} visual-review view in ${theme}` });
+          await Bun.write(join(outputDir, `${view.name}-${size}-${theme}.png`), await page.screenshot());
+        }
+      }
+    }
     await expectNoProblems();
   }, 60_000);
 

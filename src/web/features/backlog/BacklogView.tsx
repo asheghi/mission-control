@@ -148,7 +148,7 @@ function BacklogRows({
       <tr
         ref={rowRef}
         id={level > 1 ? backlogRowDomId(item.id) : undefined}
-        class={`${level > 1 ? "backlog-child-row" : ""}${isDragging ? " backlog-dragging" : ""}${isDropRow ? (dragging.nested ? " backdrop-into" : " backdrop-before") : ""}${optimisticId === item.id ? " backlog-optimistic" : ""}`.trim()}
+        class={`${level === 1 ? "backlog-root-row" : "backlog-child-row"}${isDragging ? " backlog-dragging" : ""}${isDropRow ? (dragging.nested ? " backdrop-into" : " backdrop-before") : ""}${optimisticId === item.id ? " backlog-optimistic" : ""}`.trim()}
         aria-level={level}
         data-row-id={String(item.id)}
         onDragOver={(event) => {

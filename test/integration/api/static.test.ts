@@ -824,6 +824,7 @@ describe("static web shell", () => {
       "features/detail/components.tsx",
       "features/detail/hooks.ts",
       "features/list/hooks.ts",
+      "features/mine/MineView.tsx",
       // The entry point consumes a `#token=...` development link before the app
       // renders, so the token is adopted and erased from the address bar before
       // the shell's first getToken() check. It reaches the same one client.

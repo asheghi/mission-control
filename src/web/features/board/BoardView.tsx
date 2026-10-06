@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import type { WorkStatus } from "../../../domain/types";
 import { StatusColumn } from "./components";
 import { useBoard } from "./hooks";
-import { BOARD_STATUSES } from "./types";
+import { BOARD_COLUMN_LABELS, BOARD_STATUSES } from "./types";
 import type { BoardFocusTarget, BoardViewProps } from "./types";
 
 export function BoardView(props: BoardViewProps) {
@@ -11,14 +11,26 @@ export function BoardView(props: BoardViewProps) {
   const acknowledgedFocusSequenceRef = useRef(0);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<WorkStatus | null>(null);
+  const [mobileStatus, setMobileStatus] = useState<WorkStatus>(BOARD_STATUSES[0]);
 
   const moveItem = useCallback((id: number, status: WorkStatus, focusTarget?: BoardFocusTarget): void => {
+    if (focusTarget !== undefined && window.innerWidth <= 640) setMobileStatus(status);
     board.moveItem(id, status, focusTarget);
   }, [board.moveItem]);
 
   useEffect(() => {
     const request = board.focusRequest;
     if (request === null || request.sequence === acknowledgedFocusSequenceRef.current) return;
+
+    const item = board.items.find((candidate) => candidate.id === request.id);
+    if (item === undefined) return;
+    if (window.innerWidth <= 640) {
+      if (mobileStatus !== request.status) {
+        setMobileStatus(request.status);
+        return;
+      }
+      if (item.status !== request.status) return;
+    }
 
     const control = boardRef.current?.querySelector<HTMLElement>(
       `[data-id="${request.id}"] [data-focus-target="${request.target}"]`,
@@ -29,7 +41,7 @@ export function BoardView(props: BoardViewProps) {
     // Acknowledge each optimistic/final request locally. Later item refreshes retain
     // the request in state but cannot take focus again after it has been consumed.
     acknowledgedFocusSequenceRef.current = request.sequence;
-  }, [board.focusRequest, board.items]);
+  }, [board.focusRequest, board.items, mobileStatus]);
 
   const displayedDraggingId = draggingId !== null && board.items.some((item) => item.id === draggingId)
     ? draggingId
@@ -65,7 +77,26 @@ export function BoardView(props: BoardViewProps) {
         </div>
       ) : null}
 
-      <div class="board" ref={boardRef} aria-busy={board.loading}>
+      <div class="board-status-switcher" role="group" aria-label="Show work by status">
+        {BOARD_STATUSES.map((status) => {
+          const count = board.items.filter((item) => item.status === status).length;
+          return (
+            <button
+              type="button"
+              class="board-status-button"
+              data-status={status}
+              aria-pressed={mobileStatus === status}
+              onClick={() => setMobileStatus(status)}
+              key={status}
+            >
+              {BOARD_COLUMN_LABELS[status]}
+              <span class="count" aria-label={`${count} items`}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div class="board" ref={boardRef} aria-busy={board.loading} data-mobile-status={mobileStatus}>
           {BOARD_STATUSES.map((status) => (
             <StatusColumn
               key={status}

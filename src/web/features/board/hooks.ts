@@ -73,9 +73,9 @@ export function useBoard({ refreshGeneration, onAuthenticationFailure }: BoardVi
     setMovingItems(new Set(queuesRef.current.keys()));
   }, []);
 
-  const requestFocus = useCallback((id: number, target: BoardFocusTarget | undefined, force: boolean): void => {
+  const requestFocus = useCallback((id: number, target: BoardFocusTarget | undefined, force: boolean, status: WorkStatus): void => {
     if (target === undefined) return;
-    setFocusRequest({ id, target, force, sequence: ++focusSequenceRef.current });
+    setFocusRequest({ id, target, status, force, sequence: ++focusSequenceRef.current });
   }, []);
 
   const terminalAuthentication = useCallback((caught: unknown): boolean => {
@@ -149,14 +149,15 @@ export function useBoard({ refreshGeneration, onAuthenticationFailure }: BoardVi
           if (!accepted) throw new Error("Invalid update response");
           setError("");
           setNotice(`Moved item to ${BOARD_COLUMN_LABELS[intent.status]}.`);
-          requestFocus(id, intent.focusTarget, true);
+          requestFocus(id, intent.focusTarget, true, intent.status);
           await refreshBoard(true);
         } catch (caught: unknown) {
           if (!isActive() || terminalAuthentication(caught)) return;
           if (queue.queued === null) setOverlay(id, null);
           setNotice("");
           setError(BOARD_MOVE_ERROR);
-          requestFocus(id, intent.focusTarget, true);
+          const previousStatus = canonicalRef.current.find((item) => item.id === id)?.status ?? intent.status;
+          requestFocus(id, intent.focusTarget, true, previousStatus);
           await refreshBoard(true);
           if (isActive()) {
             setNotice("");
@@ -185,7 +186,7 @@ export function useBoard({ refreshGeneration, onAuthenticationFailure }: BoardVi
     setError("");
     setNotice(`Moving item to ${BOARD_COLUMN_LABELS[status]}…`);
     setOverlay(id, status);
-    requestFocus(id, focusTarget, false);
+    requestFocus(id, focusTarget, false, status);
 
     let queue = queuesRef.current.get(id);
     if (queue === undefined) {

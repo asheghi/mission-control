@@ -1,6 +1,8 @@
 @import "./design-system/tokens.css";
 @import "./design-system/base.css";
 @import "./design-system/components.css";
+@import "./features/mine/styles.css";
+@import "./features/backlog/styles.css";
 
 .skip-link { position: fixed; top: 8px; left: 8px; z-index: 100; padding: 6px 10px; border-radius: var(--wb-radius-medium); background: var(--wb-color-accent-emphasis); color: var(--wb-color-fg-on-emphasis); font-weight: 600; transform: translateY(-150%); }
 .skip-link:focus-visible, .skip-link:focus { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; transform: translateY(0); }
@@ -58,6 +60,7 @@ main.content { flex: 1; width: 100%; max-width: var(--wb-layout-content-max); ma
 .login h1 { margin: 0; text-align: center; font-size: 20px; }
 .login .hint, .muted { color: var(--wb-color-fg-muted); font-size: 12px; }
 .login .error { min-height: 18px; color: var(--wb-color-danger-fg); font-size: 13px; }
+.board-status-switcher { display: none; }
 .board { width: 100%; display: grid; grid-template-columns: repeat(4, minmax(230px, 1fr)); gap: 12px; align-items: start; overflow-x: auto; overscroll-behavior-inline: contain; contain: paint; }
 .board-column { min-height: 260px; padding: 8px; border: 0; border-top: 2px solid var(--wb-color-border-default); border-radius: 0; background: var(--wb-color-canvas-subtle); transition: outline-color .1s ease, background-color .1s ease; }
 .board-column.drop-target { outline: 2px solid var(--wb-color-accent-emphasis); outline-offset: -1px; background: var(--wb-color-accent-subtle); }
@@ -351,128 +354,6 @@ main.content { padding-top: var(--wb-space-5); }
 .detail-comments h2 { font-size: var(--wb-font-size-xl); }
 .comment { margin-bottom: var(--wb-space-3); }
 
-.backlog-view { width: 100%; min-width: 0; }
-/* The add form is a toolbar, not a card: creating an item is a frequent,
-   primary action, so it sits directly on the canvas above the table instead of
-   inside another bordered box. */
-.backlog-add { display: flex; flex-wrap: wrap; align-items: center; gap: var(--wb-space-2); margin-bottom: var(--wb-space-4); padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.backlog-add > label { flex-basis: 100%; font-weight: var(--wb-font-weight-semibold); }
-.backlog-add > div, .relationship-form > div { display: flex; gap: var(--wb-space-2); }
-/* The base `input` rule is `width: 100%`, which inside this flex row made the
-   input claim the whole line and squeeze the submit button until its label
-   wrapped onto two lines. The input flexes instead; the button keeps its own
-   width. */
-.backlog-add input { width: auto; min-width: 0; flex: 1 1 12rem; }
-.backlog-add select { width: auto; flex: 0 0 auto; color: var(--wb-color-fg-muted); }
-.backlog-add button { flex: 0 0 auto; white-space: nowrap; }
-.backlog-add .backlog-add-hint { flex-basis: 100%; }
-/* The table surface is the canvas, not `surface-raised`: in the dark theme
-   `--wb-color-surface-raised` and `--wb-color-canvas-subtle` are the same
-   #161b22, so a raised surface made every row hover invisible. On the canvas
-   the hover, the nested tint, and the empty-row override are all real. */
-.backlog-table-scroller { width: 100%; max-width: 100%; overflow-x: auto; border: 1px solid var(--wb-color-border-muted); border-radius: var(--wb-radius-medium); background: var(--wb-color-canvas-default); box-shadow: var(--wb-shadow-small); }
-.backlog-table-scroller:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
-.backlog-table { width: 100%; min-width: 720px; border-collapse: collapse; }
-.backlog-table th, .backlog-table td { padding: var(--wb-space-2) var(--wb-space-3); border-bottom: 1px solid var(--wb-color-border-muted); text-align: left; vertical-align: middle; }
-.backlog-table th { color: var(--wb-color-fg-muted); background: var(--wb-color-canvas-subtle); font-size: var(--wb-font-size-xs); font-weight: var(--wb-font-weight-semibold); }
-.backlog-table th:not(:first-child) { width: 9rem; }
-.backlog-table tbody tr:last-child td { border-bottom: 0; }
-/* `control-hover` rather than `canvas-subtle`: it is a step away from *both* the
-   canvas and the nested tint, so hovering a child row is as visible as hovering
-   a root row. */
-.backlog-table tbody tr:hover { background: var(--wb-color-control-hover); }
-/* Nested rows are tinted as well as indented — indentation still carries the
-   hierarchy on its own, so the tint reinforces it instead of encoding it. */
-.backlog-child-row { background: color-mix(in srgb, var(--wb-color-fg-default) 4%, var(--wb-color-canvas-default)); }
-.backlog-item-cell { min-width: 20rem; }
-.backlog-item-title { min-width: 0; height: 100%; display: flex; align-items: center; gap: var(--wb-space-2); }
-/* A definite height basis for the percentage heights below. Inside a
-   table-cell whose height is content-driven, `height: 100%` on the title only
-   resolves when the Item cell itself sets the row height — a row forced taller
-   by a sibling column (a wrapped labels chip list) would leave the guide
-   spacers short of the row. `height` on a table-cell is a floor, not a cap:
-   rows still grow with their content. */
-.backlog-table td { height: 1px; }
-/* One spacer per ancestor level. Nesting is unbounded, so indentation is built
-   from repeated token-width spacers rather than a per-element custom property.
-   Each spacer also draws the tree's dotted guide line at its own left edge,
-   which puts it directly under the ancestor's toggle: the handle leads the row
-   so the guides align with the chevron column above them. The negative block
-   margins stretch the spacer across the cell's own vertical padding, so
-   consecutive child rows' lines join instead of breaking at the row border. */
-.backlog-indent {
-  width: var(--wb-space-4);
-  flex: 0 0 var(--wb-space-4);
-  align-self: stretch;
-  margin-block: calc(var(--wb-space-2) * -1);
-  border-left: 1px dotted var(--wb-color-border-default);
-}
-/* Shared title-link treatment. The wrap mode is NOT set here: a backlog title
-   and a relationship title live in very different column widths, so each sets
-   its own (`.backlog-item-title a` and `.relationship-row a` below). Two
-   conflicting `overflow-wrap` values used to sit on this selector and the later
-   one silently won. */
-.backlog-item-title a, .relationship-row a { min-width: 0; color: var(--wb-color-fg-default); font-weight: var(--wb-font-weight-medium); text-decoration: none; }
-/* The backlog title keeps `anywhere`: its column is wide, and a long unbroken
-   token there must not push the table into horizontal scroll. */
-.backlog-item-title a { flex: 1; overflow-wrap: anywhere; }
-/* The "#id" prefix is one token: left to wrap, a narrow column split it across
-   two lines and the number ran into the title. */
-.backlog-item-title a > .muted { white-space: nowrap; margin-inline-end: .25rem; }
-.backlog-item-title a:hover, .relationship-row a:hover { color: var(--wb-color-accent-fg); text-decoration: underline; }
-.backlog-toggle, .backlog-toggle-spacer { width: 1.75rem; height: 1.75rem; flex: 0 0 1.75rem; }
-.backlog-toggle { min-height: 0; padding: 0; display: inline-grid; place-items: center; border: 0; background: transparent; box-shadow: none; color: var(--wb-color-fg-muted); }
-.backlog-toggle:hover { background: var(--wb-color-control-hover); color: var(--wb-color-fg-default); }
-.backlog-toggle span { font-size: 1.25rem; line-height: 1; transition: transform .12s ease; }
-.backlog-toggle[aria-expanded="true"] span { transform: rotate(90deg); }
-/* `fg-muted` on `neutral-subtle` measured 3.93:1 — below AA for 12px text. The
-   count is data, not chrome, so it takes the default foreground. */
-.backlog-child-count { min-width: 1.5rem; padding: 0 var(--wb-space-1); border-radius: 999px; background: var(--wb-color-neutral-subtle); color: var(--wb-color-fg-default); font-size: var(--wb-font-size-xs); text-align: center; }
-.backlog-labels { display: flex; gap: var(--wb-space-1); flex-wrap: wrap; }
-.backlog-empty-row td { padding: var(--wb-space-6); text-align: center; }
-.backlog-table .backlog-empty-row:hover { background: transparent; }
-/* The type chip is deliberately plain: the type is stated in words, and colour
-   is left to the status and priority chips that already own it. */
-.backlog-type-chip { color: var(--wb-color-fg-muted); border-color: var(--wb-color-border-muted); background: transparent; }
-/* The handle is a real, focusable control — the pointer affordance and the
-   keyboard affordance share one element, so neither is a hidden shortcut. */
-.backlog-drag-handle { width: 1.25rem; height: 1.75rem; flex: 0 0 1.25rem; display: inline-grid; place-items: center; border-radius: var(--wb-radius-small); color: var(--wb-color-fg-muted); cursor: grab; font-size: var(--wb-font-size-xs); letter-spacing: -.1em; }
-.backlog-drag-handle:hover { color: var(--wb-color-fg-default); background: var(--wb-color-control-hover); }
-.backlog-drag-handle:focus-visible { outline: 2px solid var(--wb-color-focus-outline); outline-offset: 2px; }
-.backlog-drag-handle:active { cursor: grabbing; }
-.backlog-move-controls { display: flex; align-items: center; gap: var(--wb-space-1); }
-/* Row actions reveal on hover or keyboard focus and stay permanently visible
-   on touch layouts, where there is no hover to reveal them. The control itself
-   remains focusable at all times — only its paint is deferred — so the tab
-   order and the screen-reader experience never depend on the pointer. */
-.backlog-move-controls { opacity: 0; transition: opacity var(--wb-duration-fast) var(--wb-ease-standard); }
-.backlog-table tr:hover .backlog-move-controls,
-.backlog-table tr:focus-within .backlog-move-controls { opacity: 1; }
-@media (hover: none) {
-  .backlog-move-controls { opacity: 1; }
-}
-.backlog-move-button { min-height: 1.75rem; min-width: 1.75rem; padding: 0; display: inline-grid; place-items: center; border: 0; border-radius: var(--wb-radius-small); background: transparent; color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); line-height: 1; }
-.backlog-move-button:hover:not(:disabled):not([aria-disabled="true"]) { color: var(--wb-color-accent-fg); background: var(--wb-color-control-hover); }
-/* Two ways a move control reads as unavailable, and they are not the same
-   thing. `:disabled` is transient (a write is in flight). `[aria-disabled]` is
-   structural (this row simply has no previous sibling) and the control STAYS
-   focusable so a keyboard user still hears the reason. Both are dimmed and
-   neither responds to a click, because the click handler checks the same flag. */
-.backlog-move-button:disabled,
-.backlog-move-button[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
-/* Drop feedback: the row being dragged is faded, and the row under the pointer
-   states which of the two insertions it would perform. The outline is a second
-   cue — the movement itself, announced in the live region, is the first. */
-.backlog-dragging { opacity: .5; }
-.backlog-table tbody tr.backdrop-before { box-shadow: inset 0 2px 0 0 var(--wb-color-accent-emphasis); }
-.backlog-table tbody tr.backdrop-into { background: var(--wb-color-accent-subtle); outline: 1px solid var(--wb-color-accent-emphasis); outline-offset: -1px; }
-/* The row whose pending position is on screen is marked, so a move that has not
-   been confirmed yet never looks identical to one that has. */
-.backlog-optimistic { font-style: italic; }
-.backlog-add-hint, .backlog-root-note { margin: 0; font-size: var(--wb-font-size-xs); }
-.backlog-root-note { margin-top: var(--wb-space-3); }
-.backlog-add-notice { margin: 0; }
-.backlog-status { overflow-wrap: anywhere; }
 .relationship-subtasks ul { margin: 0; padding: 0; display: grid; gap: var(--wb-space-3); list-style: none; }
 .detail-relationships { padding: var(--wb-space-4); }
 .relationships-head { display: flex; align-items: center; justify-content: space-between; gap: var(--wb-space-2); margin-bottom: var(--wb-space-3); }
@@ -494,7 +375,8 @@ main.content { padding-top: var(--wb-space-5); }
    The `min-width: 8rem` floor is what stops the wrap from re-introducing the
    squeeze: below it the link stops shrinking and the row wraps instead. */
 .relationship-row { min-width: 0; display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--wb-space-2); }
-.relationship-row a { flex: 1 1 8rem; min-width: 8rem; overflow-wrap: break-word; }
+.relationship-row a { flex: 1 1 8rem; min-width: 8rem; overflow-wrap: break-word; color: var(--wb-color-fg-default); font-weight: var(--wb-font-weight-medium); text-decoration: none; }
+.relationship-row a:hover { color: var(--wb-color-accent-fg); text-decoration: underline; }
 /* The chips are decoration beside the title: they hold their intrinsic width and
    never wrap their own label. */
 .relationship-row > .chip { flex: 0 0 auto; white-space: nowrap; }
@@ -502,6 +384,7 @@ main.content { padding-top: var(--wb-space-5); }
    the row wraps, sits on its own line at the start of it. */
 .relationship-remove { flex: 0 0 auto; }
 .relationship-form { display: grid; gap: var(--wb-space-1); color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); }
+.relationship-form > div { display: flex; gap: var(--wb-space-2); }
 .relationship-form input { min-width: 0; width: auto; flex: 1 1 6rem; }
 .relationship-form button { flex: 0 0 auto; white-space: nowrap; }
 .relationship-add { margin-top: var(--wb-space-1); }
@@ -591,6 +474,11 @@ main.content { padding-top: var(--wb-space-5); }
   .auth-shell { margin-top: var(--wb-space-6); }
   .login { padding: var(--wb-space-6); }
 
+  .board-status-switcher { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--wb-space-1); margin: 0 0 var(--wb-space-3); }
+  .board-status-button { min-width: 0; min-height: 2.75rem; padding-inline: var(--wb-space-1); display: flex; align-items: center; justify-content: center; gap: var(--wb-space-1); border: 1px solid var(--wb-color-border-muted); background: var(--wb-color-surface-raised); color: var(--wb-color-fg-muted); font-size: var(--wb-font-size-xs); }
+  .board-status-button[aria-pressed="true"] { border-color: var(--wb-color-accent-muted); background: var(--wb-color-accent-subtle); color: var(--wb-color-accent-fg); }
+  .board-status-button:focus-visible { outline: 3px solid var(--wb-color-focus-outline); outline-offset: 2px; }
+  .board-status-button .count { min-width: 1.25rem; padding: 0 4px; border-radius: var(--wb-radius-pill); background: var(--wb-color-neutral-subtle); color: inherit; font-variant-numeric: tabular-nums; text-align: center; }
   .board {
     /* Bleed to the viewport edges from the parent's padding rather than from
        100vw: 100vw counts the scrollbar, so in a narrow desktop window the
@@ -616,6 +504,12 @@ main.content { padding-top: var(--wb-space-5); }
     contain: paint;
   }
   .board-column { min-height: 25rem; scroll-snap-align: start; }
+  .board { display: block; overflow: visible; contain: none; }
+  .board-column { width: 100%; min-width: 0; }
+  .board[data-mobile-status="todo"] .board-column:not([data-status="todo"]),
+  .board[data-mobile-status="doing"] .board-column:not([data-status="doing"]),
+  .board[data-mobile-status="blocked"] .board-column:not([data-status="blocked"]),
+  .board[data-mobile-status="done"] .board-column:not([data-status="done"]) { display: none; }
   .board-card { cursor: default; }
 
   .list-toolbar { gap: var(--wb-space-2); }
@@ -645,43 +539,8 @@ main.content { padding-top: var(--wb-space-5); }
   .list-table td[data-label="Assignee"] { grid-column: 1 / -1; }
   .list-table td[data-label="Labels"] { grid-column: 1 / -1; }
   .list-empty-row { display: block !important; }
-  .backlog-table-scroller { overflow: visible; border: 0; background: transparent; box-shadow: none; }
-  .backlog-table { min-width: 0; display: block; background: transparent; }
-  .backlog-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-  .backlog-table tbody { display: grid; gap: var(--wb-space-2); }
-  .backlog-table tr { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--wb-space-2) var(--wb-space-3); padding: var(--wb-space-3); border: 1px solid var(--wb-color-border-default); border-radius: var(--wb-radius-medium); background: var(--wb-color-surface-raised); box-shadow: var(--wb-shadow-small); }
-  .backlog-table td { min-width: 0; display: block; height: auto; padding: 0; border: 0; }
-  .backlog-move-controls { min-width: 0; flex-wrap: wrap; }
-  .backlog-table td::before { content: attr(data-label); display: block; color: var(--wb-color-fg-muted); font-size: .6875rem; font-weight: var(--wb-font-weight-semibold); letter-spacing: .04em; text-transform: uppercase; }
-  .backlog-table .backlog-item-cell { grid-column: 1 / -1; }
-  /* Explicit placement: auto-placement dropped the Labels cell into the narrow
-     first column under Priority. */
-  .backlog-table td[data-label="Priority"] { grid-column: 1; }
-  .backlog-table td[data-label="Assignee"] { grid-column: 2; }
-  .backlog-table td[data-label="Labels"] { grid-column: 1 / -1; }
-  /* Type and Status sit together on one line, and Move spans the card so its
-     buttons stay a comfortable tap target instead of stacking in a column. */
-  .backlog-table td[data-label="Type"] { grid-column: 1; }
-  .backlog-table td[data-label="Status"] { grid-column: 2; }
-  .backlog-table td[data-label="Move"] { grid-column: 1 / -1; }
-  .backlog-drag-handle, .backlog-move-button { width: 2.75rem; height: 2.75rem; min-width: 2.75rem; min-height: 2.75rem; }
-  .backlog-drag-handle { flex-basis: 2.75rem; }
-  .backlog-move-button { font-size: var(--wb-font-size-default); }
-  /* The item cell is the row's own heading, so repeating "ITEM" above every
-     title would be noise rather than a field label. */
-  .backlog-table .backlog-item-cell::before { display: none; }
-  .backlog-table td[data-label="Labels"]:has(> .backlog-labels:empty) { display: none; }
-  .backlog-indent { width: var(--wb-space-3); flex-basis: var(--wb-space-3); margin-block: 0; border-left: 0; }
-  .backlog-toggle, .backlog-toggle-spacer { width: 2.75rem; height: 2.75rem; flex-basis: 2.75rem; }
-  .backlog-empty-row { display: block; }
-  .backlog-empty-row td { display: block; padding: 0; }
-  .backlog-empty-row td::before { display: none; }
-  .backlog-add > div, .relationship-form > div, .relationship-add { align-items: stretch; flex-direction: column; }
-  /* The backlog title link's `flex: 1 1 12rem` basis becomes a *height* once the
-     add form stacks into a column, which made the single-line input 192px tall on
-     a phone. Stacked, the input takes the width and keeps its control height. */
-  .backlog-add input { width: 100%; flex: 0 0 auto; }
-  .backlog-add button, .relationship-form button, .relationship-add button { width: 100%; }
+  .relationship-form > div, .relationship-add { align-items: stretch; flex-direction: column; }
+  .relationship-form button, .relationship-add button { width: 100%; }
   .list-empty-row td { display: block; }
   .list-empty-row td::before { display: none; }
 

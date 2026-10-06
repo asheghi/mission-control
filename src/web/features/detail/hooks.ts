@@ -15,6 +15,14 @@ import { checkLabelAdd, deterministicLabelColor, insertMention, mentionTrigger, 
 import { createSettledBurstQueue } from "./queue";
 import type { SettledBurstQueue } from "./queue";
 import {
+  FIELD_NAMES,
+  patchValue,
+  reconcileItem,
+  reapplyIntent,
+  withFields,
+} from "./reconciliation";
+import type { AcceptedItemPatch, FieldName, FieldPatch, FieldValue, MutationMark } from "./reconciliation";
+import {
   BODY_MAX_LENGTH,
   DETAIL_BODY_NOTICE,
   DETAIL_COMMENT_NOTICE,
@@ -75,27 +83,6 @@ interface DetailApi {
 }
 const api = apiModule as DetailApi;
 
-/** The three item fields the detail view mutates one at a time. */
-type FieldName = "status" | "type" | "priority" | "assigneeId";
-
-/** The item value a field's intent maps onto (`assigneeId` → `assignee`). */
-type FieldValue = DetailItem["status"] | DetailItem["type"] | DetailItem["priority"] | number | null;
-
-interface FieldPatch {
-  readonly status?: DetailItem["status"];
-  readonly type?: DetailItem["type"];
-  readonly priority?: DetailItem["priority"];
-  readonly assigneeId?: number | null;
-}
-
-interface AcceptedItemPatch extends FieldPatch {
-  readonly title?: string;
-  readonly body?: string;
-  readonly labels?: readonly DetailLabel[];
-}
-
-const FIELD_NAMES: readonly FieldName[] = ["status", "type", "priority", "assigneeId"];
-
 function validItemId(value: unknown): number | null {
   const id = typeof value === "number" ? value : Number(value);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
@@ -110,80 +97,8 @@ function readBodyTab(id: number | null): BodyTab {
   }
 }
 
-/** Read one mutated field off a patch, or undefined when that field is absent. */
-function patchValue(patch: FieldPatch, field: FieldName): FieldValue | undefined {
-  if (field === "status") return patch.status;
-  if (field === "type") return patch.type;
-  if (field === "priority") return patch.priority;
-  return patch.assigneeId;
-}
-
-/** Apply a patch to the fields it actually carries, leaving the rest untouched. */
-function withFields(item: DetailItem, patch: FieldPatch, participants: readonly DetailParticipant[]): DetailItem {
-  let next = item;
-  if (patch.status !== undefined) next = { ...next, status: patch.status };
-  if (patch.type !== undefined) next = { ...next, type: patch.type };
-  if (patch.priority !== undefined) next = { ...next, priority: patch.priority };
-  if (patch.assigneeId !== undefined) {
-    const assignee = patch.assigneeId === null
-      ? null
-      : participants.find((participant) => participant.id === patch.assigneeId) ?? null;
-    next = { ...next, assignee };
-  }
-  return next;
-}
-
-/**
- * Re-apply one field's latest local intent over an authoritative item, so a
- * response that arrives after a newer edit cannot restore the older value.
- */
-function reapplyIntent(
-  item: DetailItem,
-  field: FieldName,
-  intent: FieldValue | undefined,
-  participants: readonly DetailParticipant[],
-): DetailItem {
-  if (intent === undefined) return item;
-  if (field === "status") return { ...item, status: intent as DetailItem["status"] };
-  if (field === "type") return { ...item, type: intent as DetailItem["type"] };
-  if (field === "priority") return { ...item, priority: intent as DetailItem["priority"] };
-  return withFields(item, { assigneeId: intent as number | null }, participants);
-}
-
-/**
- * Re-apply EVERY pending quick-field intent over a payload the server authored.
- *
- * A PATCH response is authoritative only for the field it wrote. The reply to a
- * title or label write carries a whole item too, and it echoes whatever the
- * other quick fields held when *that* request ran — so publishing it verbatim
- * would roll a newer status, priority, or assignee choice backwards. Every
- * payload coming from the server therefore goes through this gate, which
- * restores the latest local intent of each field that still has one.
- */
-function reconcileItem(
-  item: DetailItem,
-  intents: ReadonlyMap<FieldName, FieldValue | undefined>,
-  participants: readonly DetailParticipant[],
-): DetailItem {
-  let next = item;
-  for (const field of FIELD_NAMES) {
-    next = reapplyIntent(next, field, intents.get(field), participants);
-  }
-  return next;
-}
-
 /** `labels: []` is not an update, so the label queue signals a failure with this. */
 class LabelWriteFailed extends Error {}
-
-/** One accepted mutation, keyed by kind. */
-function sameMutation(left: MutationMark, right: MutationMark): boolean {
-  return left.kind === right.kind && left.generation === right.generation;
-}
-
-interface MutationMark {
-  readonly kind: "item" | "comment";
-  readonly generation: number;
-}
 
 /** Oldest first, by id, so an appended comment lands at the end of the thread. */
 function byCommentOrder(left: DetailComment, right: DetailComment): number {

@@ -44,6 +44,7 @@ export type BoardFocusTarget = "title" | "status";
 export interface BoardFocusRequest {
   id: number;
   target: BoardFocusTarget;
+  status: WorkStatus;
   sequence: number;
   /** Completion requests force a second restore after the optimistic request. */
   force: boolean;

@@ -4,6 +4,7 @@
 import { WorkboardError, type WorkboardErrorCode } from "../domain/errors";
 import { PayloadTooLargeError, ValidationError } from "../domain/errors";
 import { boundedDiagnostic } from "../observability/diagnostic";
+import type { StreamedUpload } from "../app/attachment-support";
 
 const STATUS_BY_CODE: Record<WorkboardErrorCode, number> = {
   VALIDATION: 400,
@@ -144,29 +145,8 @@ export async function readJsonBody(request: Request, maxBytes: number): Promise<
   }
 }
 
-/** What a streamed binary body yielded: the stream to store and what was seen. */
-export interface StreamedUpload {
-  /** The bytes, as a stream the BlobStore consumes exactly once. */
-  readonly body: ReadableStream<Uint8Array>;
-  /**
-   * Resolves with the leading bytes captured for signature sniffing.
-   *
-   * A promise, not a value: the prefix cannot exist until bytes have flowed,
-   * and sniffing must happen before the bytes are committed to storage. Await
-   * this *before* handing `body` to the backend.
-   */
-  readonly prefix: Promise<Uint8Array>;
-  /** Resolves once the stream has been fully consumed, or rejects on failure. */
-  readonly finished: Promise<void>;
-  /**
-   * The `Content-Length` the client declared, or null when absent.
-   *
-   * Exposed so a caller can apply a tighter cap than the streaming one once it
-   * knows the media type — refusing a 200 MiB image from its header is far
-   * cheaper than streaming 20 MiB and then aborting.
-   */
-  readonly declaredBytes: number | null;
-}
+/** The API produces the application-owned streamed upload contract. */
+export type { StreamedUpload } from "../app/attachment-support";
 
 /**
  * Streams a request body to a consumer with a hard byte cap, without ever

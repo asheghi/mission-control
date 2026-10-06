@@ -755,20 +755,6 @@ export function CommentComposer({ detail }: { detail: DetailState }) {
   );
 }
 
-export function Comments({ detail }: { detail: DetailState }) {
-  return (
-    <section class="detail-comments" aria-labelledby="comments-heading">
-      <h2 id="comments-heading">Comments</h2>
-      {detail.comments.length === 0 ? <p class="muted">No comments yet.</p> : detail.comments.map((comment) => (
-        <article class="comment card" key={comment.id}>
-          <header class="comment-head"><strong>{comment.author.name}</strong><time class="muted" dateTime={comment.createdAt}>{formatTime(comment.createdAt)}</time></header>
-          <Markdown>{comment.body}</Markdown>
-        </article>
-      ))}
-    </section>
-  );
-}
-
 /**
  * One description change. The row's `+n/−n` counts and its diff are both
  * derived from `diffLines`, which builds an O(n·m) LCS table, so neither is

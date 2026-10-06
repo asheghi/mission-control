@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { AttachmentsPanel, BodyEditor, CommentComposer, Comments, DetailHeader, DetailStatus, FieldControls, History, LabelsEditor } from "./components";
+import { AttachmentsPanel, BodyEditor, CommentComposer, DetailHeader, DetailStatus, FieldControls, History, LabelsEditor } from "./components";
+import { Comments } from "./Comments";
 import { Links } from "./Links";
 import { useDetail } from "./hooks";
 import type { DetailViewProps } from "./types";
