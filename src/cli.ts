@@ -18,11 +18,9 @@ import {
   claimServePid,
   findRestoreHolder,
   PID_LOCK_ERROR,
-  PID_LOCK_STALE,
   releaseRestoreLock,
   releaseServePid,
-  restoreLockPath,
-  servePidFilePath,
+  updateServeInfo,
 } from "./maintenance/serve-lock";
 import type { Database } from "bun:sqlite";
 import { createApiHandler } from "./api/app";
@@ -42,7 +40,7 @@ import { runStdioMcpServer } from "./mcp/stdio";
 import { APP_VERSION } from "./version";
 import { backupDatabase, defaultBackupPath, preflightRestore, restoreDatabase, runDoctor as doctorChecks, doctorAttachmentChecks } from "./maintenance/backup";
 import { bundleDatabasePath, createBundle, defaultBundlePath, restoreBundleBlobs } from "./maintenance/bundle";
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { seedBoard } from "./dev/seed";
 import { STATIC_ASSETS } from "./web/static-assets";
 import { boundedDiagnostic } from "./observability/diagnostic";
@@ -544,7 +542,11 @@ async function runMcpCommand(ctx: CommandContext): Promise<number> {
 
 async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Promise<number> {
   const args = parseArgs(rest, new Set(["host", "port", "token"]));
-  const host = value(args, "host") ?? "127.0.0.1";
+  const hostArg = value(args, "host") ?? "127.0.0.1";
+  // Accept either CLI spelling of IPv6; sockets need the bare address, URLs
+  // need exactly one pair of brackets.
+  const host = hostArg.startsWith("[") && hostArg.endsWith("]") ? hostArg.slice(1, -1) : hostArg;
+  const urlHost = host.includes(":") ? `[${host}]` : host;
   const portRaw = value(args, "port") ?? process.env.WORKBOARD_PORT ?? "8765";
   const port = Number(portRaw);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) fail(`invalid port: ${portRaw}`);
@@ -555,17 +557,17 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
   // PID: without that handshake a restore could acquire its lock between this
   // first check and our claim, and both operations would proceed.
   mkdirSync(ctx.dataDir, { recursive: true });
+  // Pin this command to the directory we lock, even if its symlink alias is
+  // retargeted while asynchronous serving/restoring work is in progress.
+  ctx = { ...ctx, dataDir: realpathSync(ctx.dataDir) };
   const restoring = findRestoreHolder(ctx.dataDir);
   if (restoring !== null) {
     fail(`a restore (pid ${restoring}) is replacing ${ctx.dataDir}; wait for it to finish before serving`);
   }
 
-  const otherServe = claimServePid(ctx.dataDir, process.pid);
+  const otherServe = claimServePid(ctx.dataDir, process.pid, { hostname: host, port });
   if (otherServe !== null) {
     if (otherServe === PID_LOCK_ERROR) fail(`cannot lock ${ctx.dataDir} for serving`);
-    if (otherServe === PID_LOCK_STALE) {
-      fail(`stale serve lock at ${servePidFilePath(ctx.dataDir)}; remove it after confirming no server uses this board`);
-    }
     fail(`another serve (pid ${otherServe}) is already using ${ctx.dataDir}`);
   }
   const racedRestore = findRestoreHolder(ctx.dataDir);
@@ -575,6 +577,7 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
   }
 
   let db: Database;
+  let server: ReturnType<typeof Bun.serve> | undefined;
   try {
     db = initializeDatabase(ctx.dataDir);
   } catch (error) {
@@ -598,7 +601,6 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
     // The handler is built before Bun.serve returns, so hold the server in a
     // mutable binding: the SSE route calls back into it to exempt its streaming
     // response from the idle timeout that would otherwise end a live feed.
-    let server: ReturnType<typeof Bun.serve> | undefined;
     const handler = createApiHandler({
       service,
       broker,
@@ -608,11 +610,17 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
       disableIdleTimeout: (request) => server?.timeout(request, 0),
     });
     server = Bun.serve({ hostname: host, port, fetch: handler });
+    const appUrl = `http://${urlHost}:${server.port}`;
+    updateServeInfo(ctx.dataDir, {
+      hostname: host,
+      port: server.port,
+      appUrl,
+    });
     // One write so the banner cannot be split across pipe chunks mid-line.
     const lines = [
-      `workboard listening on http://${host}:${server.port}`,
-      `  REST:  http://${host}:${server.port}/api/health`,
-      `  MCP:   http://${host}:${server.port}/mcp`,
+      `workboard listening on ${appUrl}`,
+      `  REST:  ${appUrl}/api/health`,
+      `  MCP:   ${appUrl}/mcp`,
     ];
     // The link carries the token in a URL fragment: a fragment never reaches
     // the server, and the web client stores it and strips it from the address
@@ -638,11 +646,11 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
       }
     }
     if (flag(args, "hide-token")) {
-      lines.push(`  Web:   http://${host}:${server.port}/`);
+      lines.push(`  Web:   ${appUrl}/`);
     } else if (tokenForLink !== undefined && tokenForLink !== "") {
-      lines.push(`  Web UI: http://${host}:${server.port}/#token=${tokenForLink}`);
+      lines.push(`  Web UI: ${appUrl}/#token=${tokenForLink}`);
     } else {
-      lines.push(`  Web:   http://${host}:${server.port}/ (no participant to sign in as; run: workboard init)`);
+      lines.push(`  Web:   ${appUrl}/ (no participant to sign in as; run: workboard init)`);
     }
     console.error(lines.join("\n"));
 
@@ -651,7 +659,9 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
       const stop = (): void => {
         if (stopping) return;
         stopping = true;
-        server.stop(true);
+        server?.stop(true);
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
         if (sessionTokenId !== null) {
           db.run("UPDATE api_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL", [systemClock.now(), sessionTokenId]);
         }
@@ -662,8 +672,9 @@ async function runServeCommand(ctx: CommandContext, rest: readonly string[]): Pr
     });
     return 0;
   } finally {
-    releaseServePid(ctx.dataDir, process.pid);
-    db.close();
+    // Close the database before releasing ownership so restore cannot race it.
+    server?.stop(true);
+    try { db.close(); } finally { releaseServePid(ctx.dataDir, process.pid); }
   }
 }
 
@@ -850,12 +861,12 @@ async function runRestore(ctx: CommandContext, rest: readonly string[]): Promise
   // preflight refuses, or this lock appears first and serve refuses. There is no
   // unprotected interval in which both can decide to proceed.
   mkdirSync(ctx.dataDir, { recursive: true });
+  // Pin this command to the directory we lock, even if its symlink alias is
+  // retargeted while asynchronous serving/restoring work is in progress.
+  ctx = { ...ctx, dataDir: realpathSync(ctx.dataDir) };
   const restoreHolder = claimRestoreLock(ctx.dataDir);
   if (restoreHolder !== null) {
     if (restoreHolder === PID_LOCK_ERROR) fail(`cannot lock ${ctx.dataDir} for restore`);
-    if (restoreHolder === PID_LOCK_STALE) {
-      fail(`stale restore lock at ${restoreLockPath(ctx.dataDir)}; remove it after confirming no restore is running`);
-    }
     fail(`another restore (pid ${restoreHolder}) is already replacing ${ctx.dataDir}`);
   }
 

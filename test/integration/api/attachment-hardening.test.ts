@@ -38,7 +38,7 @@ import type { Actor } from "../../../src/domain/types";
 import {
   claimRestoreLock,
   findRestoreHolder,
-  PID_LOCK_STALE,
+  PID_LOCK_ERROR,
   releaseRestoreLock,
   restoreLockPath,
 } from "../../../src/maintenance/serve-lock";
@@ -746,22 +746,18 @@ describe("restore locking", () => {
       const loserIndex = winnerIndex === 0 ? 1 : 0;
       const winner = children[winnerIndex];
       if (winner === undefined) throw new Error("the lock race produced no winner");
-      expect(Number(results[loserIndex])).toBe(winner.pid);
+      expect([winner.pid, PID_LOCK_ERROR]).toContain(Number(results[loserIndex]));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("a dead holder is reported without racy automatic takeover", () => {
+  test("a dead legacy holder is upgraded under the OS lock without manual removal", () => {
     const dir = mkdtempSync(join(tmpdir(), "wb-reg-lock3-"));
     try {
       initializeDatabase(dir).close();
       const path = restoreLockPath(dir);
       writeFileSync(path, "2147483646\n");
-      expect(claimRestoreLock(dir)).toBe(PID_LOCK_STALE);
-      // Once an operator has confirmed the owner is dead and removed the stale
-      // marker, the next atomic claim succeeds normally.
-      rmSync(path);
       expect(claimRestoreLock(dir)).toBeNull();
       expect(findRestoreHolder(dir)).toBe(process.pid);
       releaseRestoreLock(dir);

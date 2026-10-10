@@ -12,7 +12,7 @@ import { Database as SqliteDatabase } from "bun:sqlite";
 import { databaseFilePath, initializeDatabase } from "../db/database";
 import { currentSchemaVersion } from "../db/migrate";
 import { migrations } from "../db/schema";
-import { findRestoreHolder, findRunningServePid, servePidFilePath } from "./serve-lock";
+import { findRestoreHolder, findRunningServePid, ownsRestoreLock } from "./serve-lock";
 import { listAllCommittedAttachments, listBlobDeletions, listPendingAttachments, listQueuedStorageKeys } from "../db/repositories/attachments";
 import type { BlobStore } from "../storage/types";
 
@@ -123,12 +123,11 @@ export function preflightRestore(dataDir: string, backupPath: string, options: {
   const runningServe = findRunningServePid(dataDir);
   if (runningServe !== null) {
     throw new Error(
-      `refusing to restore: a workboard serve (pid ${runningServe}) holds ${dataDir} open — stop it first, ` +
-        `or remove ${servePidFilePath(dataDir)} if that PID is stale`,
+      `refusing to restore: a workboard serve lock (${runningServe > 0 ? `pid ${runningServe}` : "owner unavailable"}) holds ${dataDir} open — stop it first; never delete an active lock file`,
     );
   }
   const restoring = findRestoreHolder(dataDir);
-  if (restoring !== null && restoring !== process.pid) {
+  if (restoring !== null && !ownsRestoreLock(dataDir)) {
     throw new Error(`refusing to restore: another restore (pid ${restoring}) holds ${dataDir}`);
   }
 }

@@ -130,8 +130,8 @@ describe("backup and restore", () => {
       await run(["init"], target);
       await run(["add", "Existing data"], target);
 
-      // Simulate a live server by recording this (alive) test process PID.
-      writeFileSync(servePidFilePath(target), `${process.pid}\n`);
+      // Hold a real OS lock, not just diagnostic metadata.
+      expect(claimServePid(target, process.pid)).toBeNull();
 
       const refused = await run(["restore", "--input", backup, "--force"], target);
       expect(refused.code).not.toBe(0);
@@ -139,6 +139,7 @@ describe("backup and restore", () => {
       expect(refused.stderr).toContain(String(process.pid));
       expect(publicItems(target)).not.toBe(publicItems(source));
     } finally {
+      releaseServePid(target, process.pid);
       rmSync(source, { recursive: true, force: true });
       rmSync(target, { recursive: true, force: true });
       rmSync(join(backup, ".."), { recursive: true, force: true });
@@ -158,27 +159,20 @@ describe("serve pid lock", () => {
       // be rejected; process-level idempotence would admit embedded invocations.
       expect(claimServePid(dir, process.pid)).toBe(process.pid);
 
-      // A genuinely different live server is rejected without replacing the
-      // recorded holder. Losing the older PID would let restore run underneath
-      // that still-live server after the newer process exits.
-      const child = Bun.spawn(["sleep", "5"]);
-      try {
-        expect(claimServePid(dir, child.pid)).toBe(process.pid);
-        expect(findRunningServePid(dir)).toBe(process.pid);
-      } finally {
-        child.kill();
-      }
-
-      // A file with unparseable content is not a discoverable server.
+      // Diagnostic metadata cannot release or invalidate a held OS lock.
       writeFileSync(servePidFilePath(dir), "not-a-pid\n");
-      expect(findRunningServePid(dir)).toBeNull();
+      expect(findRunningServePid(dir)).toBe(process.pid);
+      releaseServePid(dir, process.pid + 1);
+      expect(findRunningServePid(dir)).toBe(process.pid);
 
-      // Release removes the file only when it still records our own PID.
-      writeFileSync(servePidFilePath(dir), `${process.pid}\n`);
       releaseServePid(dir, process.pid);
-      expect(existsSync(servePidFilePath(dir))).toBe(false);
-      releaseServePid(dir, process.pid); // no-op when already gone
+      expect(findRunningServePid(dir)).toBeNull();
+      // Stable inode remains: unlinking it would let contenders bypass flock.
+      expect(existsSync(servePidFilePath(dir))).toBe(true);
+      expect(readFileSync(servePidFilePath(dir), "utf8")).toBe("");
+      releaseServePid(dir, process.pid); // no-op when already released
     } finally {
+      releaseServePid(dir, process.pid);
       rmSync(dir, { recursive: true, force: true });
     }
   });

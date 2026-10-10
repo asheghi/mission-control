@@ -40,7 +40,12 @@ bun run dev:board
   `--dir <path>`.
 - Before serving, check for a live or stale server with
   `ss -ltnp | grep 8765`. A server already bound to 8765 makes the new bind
-  fail with `EADDRINUSE`; `workboard.pid` can point to a dead process.
+  fail with `EADDRINUSE`. `workboard.pid` contains JSON server metadata;
+  its OS-managed `flock` (Linux/macOS), not the recorded PID, determines whether
+  the board is in use. Crashes/reboots release ownership automatically. The
+  file persists as a stable inode: never delete an active lock file. Dead
+  legacy bare-PID markers are upgraded automatically; stop old-version servers
+  before upgrading (live legacy PIDs are conservatively protected).
 - `bun run dev:board -- --seed` fills the board with development data first
   (see "Development seed" below).
 

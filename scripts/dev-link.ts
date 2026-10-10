@@ -22,7 +22,7 @@
 //
 // SECURITY — same contract as scripts/dev.ts: the printed link carries a live
 // bearer token in the URL fragment. Treat it as a secret.
-import { findRunningServePid, servePidFilePath } from "../src/maintenance/serve-lock";
+import { findRunningServePid, findRunningServeInfo } from "../src/maintenance/serve-lock";
 import { bootstrapBoard, parseOptions, printLoginBlock, runForeground } from "./dev-common";
 
 import { healthEndpointResponds, tokenAcceptedOnOrigin } from "./dev-probe";
@@ -40,7 +40,9 @@ async function main(): Promise<void> {
 
   if (!healthy) {
     if (servePid !== null) {
-      fail(`serve pid ${servePid} holds ${options.dataDir}, but /api/health on http://${options.host}:${options.port} did not answer; pass the right --host and --port, or remove the stale lock at ${servePidFilePath(options.dataDir)} after confirming no server runs for this board`);
+      const info = findRunningServeInfo(options.dataDir);
+      const endpoint = info?.appUrl !== undefined ? `; recorded server URL: ${info.appUrl}` : "";
+      fail(`serve lock (${servePid > 0 ? `pid ${servePid}` : "owner unavailable"}) holds ${options.dataDir}, but /api/health on http://${options.host}:${options.port} did not answer${endpoint}; pass the right --host and --port, or stop the owning server; never delete an active lock file`);
     }
     console.error(`dev-link: nothing on http://${options.host}:${options.port}; starting dev:board`);
     await runForeground(args.length > 0 ? ["run", "dev:board", "--", ...args] : ["run", "dev:board"]);

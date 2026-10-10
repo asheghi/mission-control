@@ -14,7 +14,11 @@ workboard
 /workboard-data/
 /workboard.pid
 /workboard.restore.lock
+/workboard.pid.gate
+/workboard.restore.lock.gate
 /workboard.storage.json
 /workboard.storage.json.tmp-*
 /blobs/
 *.sqlite-journal
+
+.zvec-grep

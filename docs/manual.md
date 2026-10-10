@@ -421,9 +421,22 @@ workboard doctor [--host <host>] [--port <port>]
 ```
 
 - **serve**: binds loopback by default (`--host`/`--port`, or
-  `WORKBOARD_PORT`). It takes a cooperative PID lock in the data directory;
-  if another `serve` already holds it, you get a warning on stderr (SQLite
-  tolerates multiple readers, but see restore below). The banner prints a
+  `WORKBOARD_PORT`). It takes an exclusive OS-managed `flock` in the data
+  directory (Linux/macOS); another `serve` on the same board is refused.
+  `workboard.pid` stores JSON metadata: PID, canonical data directory, start
+  time, hostname, actual bound port, and server URL (without credentials).
+  Ownership is released automatically on exit, crash, or reboot; leftover JSON
+  does not block restart, even if its PID is reused. Lock files remain on disk
+  as stable inodes and must never be deleted while in use. Companion `.gate`
+  files serialize brief discovery probes with claims, so an idle probe cannot
+  reject a valid startup. Gate acquisition times out after one second and fails
+  closed if a probe is suspended or stalled, rather than hanging indefinitely.
+  Linux supports glibc and musl libc. Serve and restore
+  pin the canonical data directory before locking and use it for database and
+  blob operations, even if a directory symlink is later retargeted. Dead or malformed
+  old bare-PID markers are upgraded automatically, but live legacy PIDs are
+  protected: stop old-version servers before upgrading, and do not mix old
+  and new versions against one board. The banner prints a
   `Web UI: http://<host>:<port>/#token=<token>` sign-in link using a
   self-issued `serve-session` token (bound to the `admin` human participant,
   falling back to the first human, then the first participant) that is
@@ -433,8 +446,10 @@ workboard doctor [--host <host>] [--port <port>]
   (default output path derived from the data dir + timestamp).
 - **restore**: refuses to overwrite an existing database without `--force`.
   With `--force` it refuses to clobber a **running** `serve` (checks the
-  PID lock) — restore while the server runs corrupts the DB, so this is
-  guarded. Stop serve first, or pick a fresh directory.
+  OS lock) — restore while the server runs corrupts the DB, so this is
+  guarded. Stop serve first, or pick a fresh directory. Restore also holds an
+  exclusive OS lock in `workboard.restore.lock`, released automatically if the
+  restore process exits or crashes; concurrent serve/restore startup is refused.
 - **doctor**: health checks for data dir, SQLite integrity, schema state,
   foreign keys, row counts, and whether the port is answerable — prints one
   `[ok]/[FAIL]` line per check and exits non-zero when unhealthy. Schedule

@@ -1,148 +1,233 @@
-// Cooperative PID lock for `workboard serve`. SQLite happily supports several
-// connections, but `restore --force` must never run while a serve holds the
-// database open (its cached pages and the unlinked WAL would corrupt the
-// restored file), so restore needs a reliable way to discover a live server.
-// A PID file with liveness probing is that signal; a stale file (crash) is
-// detected by checking whether the recorded PID is still alive.
-import { existsSync, linkSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// Kernel-owned cooperative locks for serve and restore. Metadata is diagnostic,
+// not proof of ownership: flock is released even on SIGKILL or a machine reboot.
+// NEVER unlink these files: contenders must always lock the same stable inode.
+import { dlopen, FFIType } from "bun:ffi";
+import { closeSync, constants, ftruncateSync, openSync, readFileSync, realpathSync, writeSync } from "node:fs";
 import { join } from "node:path";
+
+export const PID_LOCK_ERROR = -1;
+const LOCK_EX_NB = 2 | 4;
+let flock: ((fd: number, operation: number) => number) | undefined;
+
+export function loadFlock(load: (library: string) => (fd: number, operation: number) => number): (fd: number, operation: number) => number {
+  // Bun's FFI ships in the compiled binary; no helper process or dependency.
+  // Fail closed on unsupported platforms, never fall back to a PID-only lock.
+  const muslArch = ({ x64: "x86_64", arm64: "aarch64", arm: "armhf", ia32: "i386", riscv64: "riscv64" } as Record<string, string>)[process.arch] ?? process.arch;
+  const libraries = process.platform === "linux" ? ["libc.so.6", "libc.so", `/lib/ld-musl-${muslArch}.so.1`]
+    : process.platform === "darwin" ? ["/usr/lib/libSystem.B.dylib"] : [];
+  // Runtime-only musl installations may expose only the dynamic loader, which
+  // is also libc; development installations additionally provide libc.so.
+  for (const library of libraries) {
+    try {
+      return load(library);
+    } catch { /* Try the next libc; never fall back to PID-only ownership. */ }
+  }
+  throw new Error("cannot load flock: Workboard requires Linux or macOS libc");
+}
+
+function tryLock(fd: number): boolean {
+  flock ??= loadFlock((library) => dlopen(library, {
+    flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+  }).symbols.flock);
+  return flock(fd, LOCK_EX_NB) === 0;
+}
+
+export interface LockInfo {
+  readonly version: 1;
+  readonly kind: "serve" | "restore";
+  readonly pid: number;
+  readonly dataDir: string;
+  readonly startedAt: number;
+  readonly hostname?: string;
+  readonly port?: number;
+  readonly appUrl?: string;
+}
+
+interface HeldLock {
+  readonly fd: number;
+  info: LockInfo;
+}
+const held = new Map<string, HeldLock>();
 
 export function servePidFilePath(dataDir: string): string {
   return join(dataDir, "workboard.pid");
 }
 
-function readPid(path: string): number | null {
+export function restoreLockPath(dataDir: string): string {
+  return join(dataDir, "workboard.restore.lock");
+}
+
+function canonicalPath(dataDir: string, kind: LockInfo["kind"]): string {
+  return join(realpathSync(dataDir), kind === "serve" ? "workboard.pid" : "workboard.restore.lock");
+}
+
+function readInfo(path: string): LockInfo | null {
   try {
-    const raw = readFileSync(path, "utf8").trim();
-    const pid = Number(raw);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<LockInfo> | null;
+    if (value === null || value.version !== 1 || (value.kind !== "serve" && value.kind !== "restore") ||
+      !Number.isInteger(value.pid) || (value.pid ?? 0) <= 0 || typeof value.dataDir !== "string" ||
+      typeof value.startedAt !== "number") return null;
+    return value as LockInfo;
   } catch {
     return null;
   }
 }
 
-function pidIsAlive(pid: number): boolean {
+// Compatibility with the previous bare-PID format. Do not overwrite an older
+// live server's marker. Dead or malformed legacy markers are upgraded in place.
+// Stop old-version servers before upgrading; old clients cannot read JSON locks.
+function legacyHolder(path: string): number | null {
+  let raw: string;
+  try { raw = readFileSync(path, "utf8").trim(); } catch { return null; }
+  if (!/^[1-9]\d*$/.test(raw)) return null;
+  const pid = Number(raw);
+  if (!Number.isSafeInteger(pid)) return null;
   try {
     process.kill(pid, 0);
-    return true;
+    return pid;
   } catch (error) {
-    // ESRCH is the one definitive "no such process" result. EPERM means the
-    // process exists but belongs to another user or namespace; treating that as
-    // dead would let restore run underneath a live server on a shared board.
-    return !(typeof error === "object" && error !== null && (error as { code?: string }).code === "ESRCH");
+    return (error as NodeJS.ErrnoException).code === "ESRCH" ? null : pid;
   }
 }
 
-/** Returns the PID of a live serve for this data directory, if discoverable. */
-export function findRunningServePid(dataDir: string): number | null {
-  const path = servePidFilePath(dataDir);
-  if (!existsSync(path)) return null;
-  const pid = readPid(path);
-  if (pid === null || !pidIsAlive(pid)) return null;
-  return pid;
+function writeInfo(lock: HeldLock): void {
+  // Only the flock owner writes. Readers encountering a partial write fail
+  // closed if the inode is locked, rather than mistaking it for an idle board.
+  ftruncateSync(lock.fd, 0);
+  const bytes = Buffer.from(`${JSON.stringify(lock.info)}\n`);
+  let written = 0;
+  while (written < bytes.length) {
+    written += writeSync(lock.fd, bytes, written, bytes.length - written, written);
+  }
 }
 
-export const PID_LOCK_ERROR = -1;
-export const PID_LOCK_STALE = -2;
-
-/**
- * Exclusively records this serve's PID.
- *
- * Two servers cannot safely share one data directory: a single overwriteable
- * PID file loses the older holder and lets restore replace its open database.
- * The populated temporary inode plus hard link makes publication atomic — a
- * contender sees either no marker or a complete PID, never an empty file.
- */
-export function claimServePid(dataDir: string, pid: number): number | null {
-  const path = servePidFilePath(dataDir);
-  const claim = publishPidAtomically(path, pid);
-  if (claim === "acquired") return null;
-  if (claim === "error") return PID_LOCK_ERROR;
-  const holder = readPid(path);
-  if (holder !== null && pidIsAlive(holder)) return holder;
-  // Reaping an abandoned marker automatically is itself racy: another process
-  // can publish a fresh marker between a stale read and unlink. Refuse with a
-  // distinct result so the operator can remove the named stale marker safely.
-  return PID_LOCK_STALE;
-}
-
-/** Removes the PID file only if it still records our own PID. */
-export function releaseServePid(dataDir: string, pid: number): void {
-  const path = servePidFilePath(dataDir);
-  if (readPid(path) === pid) rmSync(path, { force: true });
-}
-
-// --- Restore lock -------------------------------------------------------------
-
-/**
- * Path of the restore-in-progress marker.
- *
- * Distinct from the serve PID file, which is advisory by design: `serve`
- * overwrites it and carries on, because two servers on one data directory is
- * discouraged rather than forbidden. A restore cannot tolerate that — replacing
- * the database under a server that started mid-restore is exactly the corruption
- * the preflight check exists to prevent, and the check alone cannot see a server
- * that starts after it runs.
- */
-export function restoreLockPath(dataDir: string): string {
-  return join(dataDir, "workboard.restore.lock");
-}
-
-/**
- * Take the restore lock, or report who holds it.
- *
- * Creation is exclusive at the filesystem boundary: a read-then-write check is
- * not a lock because two restore processes can both read "absent" before either
- * writes. A fully populated inode is linked into place atomically instead. A
- * live holder never expires by age — a large remote restore may legitimately
- * run for hours, and letting another process take over mid-copy would corrupt
- * the board.
- */
-export function claimRestoreLock(dataDir: string): number | null {
-  const path = restoreLockPath(dataDir);
-  const claim = publishPidAtomically(path, process.pid);
-  if (claim === "acquired") return null;
-  if (claim === "error") return PID_LOCK_ERROR;
-  const holder = readPid(path);
-  if (holder !== null && pidIsAlive(holder)) return holder;
-  // See claimServePid: automatic stale reaping cannot be made atomic with lock
-  // acquisition using portable filesystem primitives. Refusal is safer than two
-  // restores both believing they own the board.
-  return PID_LOCK_STALE;
-}
-
-/** Release the restore lock if we still hold it. */
-export function releaseRestoreLock(dataDir: string): void {
-  const path = restoreLockPath(dataDir);
-  if (readPid(path) === process.pid) rmSync(path, { force: true });
-}
-
-/** Whether a restore is currently in progress for this data directory. */
-export function findRestoreHolder(dataDir: string): number | null {
-  const holder = readPid(restoreLockPath(dataDir));
-  return holder !== null && pidIsAlive(holder) ? holder : null;
-}
-
-type PidPublication = "acquired" | "exists" | "error";
-
-/** Publish a complete PID file with an atomic, no-replace hard link. */
-function publishPidAtomically(path: string, pid: number): PidPublication {
-  const temp = `${path}.claim-${pid}-${crypto.randomUUID()}`;
+// Serialize brief probes with acquisition, not with the lifetime of an owner.
+// Otherwise discovery's temporary flock can masquerade as a real owner. This
+// stable gate inode is never removed; a crash releases it just like the main lock.
+function enterGate(path: string): number {
+  const fd = openSync(`${path}.gate`, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
   try {
-    writeFileSync(temp, `${pid}\n`, { flag: "wx" });
-    try {
-      linkSync(temp, path);
-      return "acquired";
-    } catch (error) {
-      return isAlreadyExists(error) ? "exists" : "error";
+    // A stopped probe must not strand every future startup in blocking FFI.
+    // Keep the public synchronous API, but yield the CPU between nonblocking
+    // attempts and fail closed after a bounded, monotonic deadline.
+    const deadline = performance.now() + 1_000;
+    while (!tryLock(fd)) {
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new Error("timed out acquiring lock coordination gate");
+      Bun.sleepSync(Math.min(5, remaining));
     }
-  } catch {
-    return "error";
-  } finally {
-    rmSync(temp, { force: true });
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
   }
 }
 
-function isAlreadyExists(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: string }).code === "EEXIST";
+function claim(dataDir: string, kind: LockInfo["kind"], endpoint?: { hostname: string; port: number }): number | null {
+  let gate: number | undefined;
+  let fd: number | undefined;
+  try {
+    const path = canonicalPath(dataDir, kind);
+    const existing = held.get(path);
+    if (existing !== undefined) return existing.info.pid;
+    gate = enterGate(path);
+    fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    if (!tryLock(fd)) return readInfo(path)?.pid ?? PID_LOCK_ERROR;
+    const legacy = legacyHolder(path);
+    if (legacy !== null) return legacy;
+    const lock: HeldLock = {
+      fd,
+      info: { version: 1, kind, pid: process.pid, dataDir: realpathSync(dataDir), startedAt: Date.now(), ...endpoint },
+    };
+    writeInfo(lock);
+    held.set(path, lock);
+    fd = undefined; // Ownership transferred to held; close only on release.
+    return null;
+  } catch {
+    return PID_LOCK_ERROR;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    if (gate !== undefined) closeSync(gate);
+  }
+}
+
+function discover(dataDir: string, kind: LockInfo["kind"]): number | null {
+  let gate: number | undefined;
+  let fd: number | undefined;
+  try {
+    const path = canonicalPath(dataDir, kind);
+    const ours = held.get(path);
+    if (ours !== undefined) return ours.info.pid;
+    gate = enterGate(path);
+    fd = openSync(path, constants.O_RDWR | constants.O_NOFOLLOW);
+    if (!tryLock(fd)) return readInfo(path)?.pid ?? PID_LOCK_ERROR;
+    // An unlocked JSON file is stale, even if its PID has been reused.
+    return legacyHolder(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : PID_LOCK_ERROR;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+    if (gate !== undefined) closeSync(gate);
+  }
+}
+
+function release(dataDir: string, kind: LockInfo["kind"]): void {
+  const path = canonicalPath(dataDir, kind);
+  const lock = held.get(path);
+  if (lock === undefined) return;
+  try {
+    // Keep the inode, but clear diagnostic metadata on clean shutdown.
+    ftruncateSync(lock.fd, 0);
+  } finally {
+    held.delete(path);
+    closeSync(lock.fd);
+  }
+}
+
+/** null = acquired, positive PID = occupied, -1 = unavailable/unknown owner. */
+export function claimServePid(dataDir: string, pid: number, endpoint?: { hostname: string; port: number }): number | null {
+  // The OS lock belongs to this process, not an arbitrary PID supplied by callers.
+  if (pid !== process.pid) return PID_LOCK_ERROR;
+  return claim(dataDir, "serve", endpoint);
+}
+
+/** Publish the actual endpoint after binding (especially important for port 0). */
+export function updateServeInfo(dataDir: string, endpoint: { hostname: string; port: number; appUrl: string }): void {
+  const lock = held.get(canonicalPath(dataDir, "serve"));
+  if (lock === undefined) throw new Error("cannot publish server info without holding the serve lock");
+  lock.info = { ...lock.info, ...endpoint };
+  writeInfo(lock);
+}
+
+export function findRunningServePid(dataDir: string): number | null {
+  return discover(dataDir, "serve");
+}
+
+/** Metadata is returned only when a live lock still matches its recorded PID. */
+export function findRunningServeInfo(dataDir: string): LockInfo | null {
+  const pid = findRunningServePid(dataDir);
+  if (pid === null || pid === PID_LOCK_ERROR) return null;
+  const info = readInfo(servePidFilePath(dataDir));
+  return info?.kind === "serve" && info.pid === pid ? info : null;
+}
+
+export function releaseServePid(dataDir: string, pid: number): void {
+  if (pid === process.pid) release(dataDir, "serve");
+}
+
+export function claimRestoreLock(dataDir: string): number | null {
+  return claim(dataDir, "restore");
+}
+
+export function releaseRestoreLock(dataDir: string): void {
+  release(dataDir, "restore");
+}
+
+export function findRestoreHolder(dataDir: string): number | null {
+  return discover(dataDir, "restore");
+}
+
+/** Ownership comes from our held descriptor, never from diagnostic JSON. */
+export function ownsRestoreLock(dataDir: string): boolean {
+  return held.has(canonicalPath(dataDir, "restore"));
 }
