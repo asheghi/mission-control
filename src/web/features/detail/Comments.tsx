@@ -12,6 +12,10 @@ export function Comments({ detail }: { detail: DetailState }) {
   const comments = detail.comments;
   const visibleStart = Math.max(0, comments.length - INITIAL_COMMENT_COUNT - olderShown);
   const olderCount = visibleStart;
+  // Rendered newest-first: the visible slice is the tail of the chronological
+  // list (the newest comments), and reversing it puts the most recent comment
+  // on top while "show older" reveals earlier ones beneath it.
+  const visible = comments.slice(visibleStart).reverse();
   const showOlder = (): void => {
     const count = Math.min(OLDER_COMMENT_BATCH_SIZE, olderCount);
     setOlderShown((shown) => shown + count);
@@ -25,7 +29,7 @@ export function Comments({ detail }: { detail: DetailState }) {
           Show older comments ({olderCount})
         </button> : null}
         <div id="comment-thread">
-          {comments.slice(visibleStart).map((comment) => (
+          {visible.map((comment) => (
             <article class="comment card" key={comment.id}>
               <header class="comment-head"><strong>{comment.author.name}</strong><time class="muted" dateTime={comment.createdAt}>{formatTime(comment.createdAt)}</time></header>
               <Markdown>{comment.body}</Markdown>

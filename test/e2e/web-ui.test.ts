@@ -503,7 +503,7 @@ describe("web UI in a real browser", () => {
     await expectNoProblems();
   }, 60_000);
 
-  test("detail comments disclose older comments in chronological, keyboard-accessible batches", async () => {
+  test("detail comments are newest-first and disclose older comments in keyboard-accessible batches", async () => {
     if (skipWithoutChromium()) return;
     const { item } = await board.request<{ item: { id: number } }>("/api/items", {
       method: "POST", body: JSON.stringify({ title: "Long comment thread", body: "Thread fixture." }),
@@ -523,14 +523,14 @@ describe("web UI in a real browser", () => {
     expect(await page.text(".detail-comments")).toContain("Thread comment 23");
     expect(await page.text(".detail-comments")).not.toContain("Thread comment 13");
     expect(await page.evaluate<string[]>(`Array.from(document.querySelectorAll(".detail-comments .comment")).map((node) => node.textContent.match(/Thread comment \\d+/)[0])`))
-      .toEqual(Array.from({ length: 10 }, (_, index) => `Thread comment ${String(index + 14).padStart(2, "0")}`));
+      .toEqual(Array.from({ length: 10 }, (_, index) => `Thread comment ${String(23 - index).padStart(2, "0")}`));
 
     await page.focus(".show-older-comments");
     await page.press(".show-older-comments", "Enter");
     await page.waitFor(`document.querySelectorAll(".detail-comments .comment").length === 20`, { description: "the next older batch" });
     expect(await page.evaluate<string>(`document.querySelector(".detail-comments [role=status]").textContent`)).toBe("Showing 10 older comments.");
     expect(await page.evaluate<string[]>(`Array.from(document.querySelectorAll(".detail-comments .comment")).map((node) => node.textContent.match(/Thread comment \\d+/)[0])`))
-      .toEqual(Array.from({ length: 20 }, (_, index) => `Thread comment ${String(index + 4).padStart(2, "0")}`));
+      .toEqual(Array.from({ length: 20 }, (_, index) => `Thread comment ${String(23 - index).padStart(2, "0")}`));
     await page.click(".show-older-comments");
     await page.waitFor(`document.querySelectorAll(".detail-comments .comment").length === 23`, { description: "the remaining comments" });
     expect(await page.count(".show-older-comments")).toBe(0);
